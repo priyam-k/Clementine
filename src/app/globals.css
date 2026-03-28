@@ -1,26 +1,109 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* Colors */
+  --color-primary: #EF8354;
+  --color-clementine-red: #6f0600;
+  --color-surface: #FCFAF8;
+  --color-on-surface: #120B09;
+  --color-on-surface-variant: #4A3935;
+  --color-surface-container: #F5F1EE;
+  --color-surface-container-high: #EDE7E3;
+  --color-surface-container-low: #FAF6F3;
+  --color-outline: #2D1D19;
+  --color-error: #BA1A1A;
+
+  /* Fonts */
+  --font-headline: "Plus Jakarta Sans", sans-serif;
+  --font-body: "Plus Jakarta Sans", sans-serif;
+  --font-label: "Inter", sans-serif;
+
+  /* Border Radius */
+  --radius-DEFAULT: 0.125rem;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.5rem;
+  --radius-full: 9999px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #FCFAF8;
+  color: #120B09;
+  font-family: var(--font-plus-jakarta, "Plus Jakarta Sans"), sans-serif;
+}
+
+/* Mesh background */
+.mesh-bg {
+  background-color: #fdf8f5;
+  background-image:
+    linear-gradient(30deg, #EF835405 12%, transparent 12.5%, transparent 87%, #EF835405 87.5%, #EF835405),
+    linear-gradient(150deg, #EF835405 12%, transparent 12.5%, transparent 87%, #EF835405 87.5%, #EF835405),
+    linear-gradient(60deg, #6f060005 25%, transparent 25.5%, transparent 75%, #6f060005 75%, #6f060005);
+  background-size: 80px 140px;
+}
+
+/* Grainy overlay */
+.grainy-bg {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.025;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #EF8354;
+  border-radius: 10px;
+}
+
+/* Pulse ring for voice UI */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.pulse-ring {
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+/* Shimmer for loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #EDE7E3 25%, #F5F1EE 50%, #EDE7E3 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Harvest meter fill */
+.harvest-meter-fill {
+  background-color: #EF8354;
+  position: relative;
+  overflow: hidden;
+}
+.harvest-meter-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+  animation: shimmer 2s infinite;
+  background-size: 200% 100%;
+}
+
+/* Precision graph bars */
+.precision-graph-bar {
+  transition: height 0.3s ease;
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(239, 131, 84, 0.3);
 }
