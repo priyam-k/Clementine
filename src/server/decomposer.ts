@@ -41,13 +41,43 @@ function decomposeFractalRender(job: ServerJob): ServerTask[] {
   const tilesY = Math.ceil(height / tileSize);
   const createdTasks: ServerTask[] = [];
 
+  const tileSpecs: Array<{
+    tx: number;
+    ty: number;
+    tileX: number;
+    tileY: number;
+    tileWidth: number;
+    tileHeight: number;
+    distanceToCenter: number;
+  }> = [];
+
+  const imageCenterX = width / 2;
+  const imageCenterY = height / 2;
+
   for (let ty = 0; ty < tilesY; ty++) {
     for (let tx = 0; tx < tilesX; tx++) {
       const tileX = tx * tileSize;
       const tileY = ty * tileSize;
       const tileWidth = Math.min(tileSize, width - tileX);
       const tileHeight = Math.min(tileSize, height - tileY);
+      const tileCenterX = tileX + tileWidth / 2;
+      const tileCenterY = tileY + tileHeight / 2;
 
+      tileSpecs.push({
+        tx,
+        ty,
+        tileX,
+        tileY,
+        tileWidth,
+        tileHeight,
+        distanceToCenter: Math.hypot(tileCenterX - imageCenterX, tileCenterY - imageCenterY),
+      });
+    }
+  }
+
+  tileSpecs
+    .sort((a, b) => a.distanceToCenter - b.distanceToCenter)
+    .forEach(({ tx, ty, tileX, tileY, tileWidth, tileHeight }) => {
       const input: FractalTileInput = {
         fractalType,
         tileX,
@@ -73,8 +103,7 @@ function decomposeFractalRender(job: ServerJob): ServerTask[] {
         inputPayload: input as unknown as Record<string, unknown>,
       });
       createdTasks.push(task);
-    }
-  }
+    });
 
   updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;

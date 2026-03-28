@@ -1,34 +1,35 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { WireWorker } from "@/lib/shared-types";
-import { Activity, BatteryCharging, Gauge, Zap } from "lucide-react";
+import { Cpu, Database, HardDrive, Users, Zap } from "lucide-react";
 
 interface MetricSnapshot {
-  benchmark: number;
-  busy: number;
-  efficiency: number;
-  battery: number;
+  cpuPressure: number;
+  memoryPoolGb: number;
+  gpuUsage: number;
+  storageUsage: number;
+  activeWorkers: number;
 }
 
 const HISTORY_LEN = 30;
 
-function buildPath(values: number[], w: number, h: number): string {
+function buildPath(values: number[], w: number, h: number, maxValue: number): string {
   if (values.length < 2) return "";
   const step = w / (values.length - 1);
-  const points = values.map((v, i) => {
+  const points = values.map((value, i) => {
     const x = i * step;
-    const y = h - (v / 100) * h;
+    const y = h - (value / Math.max(maxValue, 1)) * h;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   return `M ${points.join(" L ")}`;
 }
 
-function buildFill(values: number[], w: number, h: number): string {
+function buildFill(values: number[], w: number, h: number, maxValue: number): string {
   if (values.length < 2) return "";
   const step = w / (values.length - 1);
-  const pts = values.map((v, i) => {
+  const pts = values.map((value, i) => {
     const x = i * step;
-    const y = h - (v / 100) * h;
+    const y = h - (value / Math.max(maxValue, 1)) * h;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const first = pts[0].split(",");
@@ -36,64 +37,60 @@ function buildFill(values: number[], w: number, h: number): string {
   return `M ${pts.join(" L ")} L ${last[0]},${h} L ${first[0]},${h} Z`;
 }
 
-interface SparklineProps {
+function Sparkline({
+  values,
+  color,
+  fillColor,
+  label,
+  current,
+  icon,
+  displayValue,
+  unit = "%",
+  maxValue = 100,
+}: {
   values: number[];
   color: string;
   fillColor: string;
   label: string;
   current: number;
   icon: React.ReactNode;
+  displayValue?: string;
   unit?: string;
-}
-
-function Sparkline({ values, color, fillColor, label, current, icon, unit = "%" }: SparklineProps) {
+  maxValue?: number;
+}) {
   const W = 200;
   const H = 48;
-
   const colorClass = current > 85 ? "text-[#BA1A1A]" : current > 60 ? "text-[#EF8354]" : color;
 
   return (
     <div className="bg-white border border-[#120B09]/5 rounded-sm p-4 hover:border-[#EF8354]/20 transition-all">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 bg-[#F5F1EE] rounded-sm">
-            {icon}
-          </div>
+          <div className="p-1.5 bg-[#F5F1EE] rounded-sm">{icon}</div>
           <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
             {label}
           </p>
         </div>
         <span className={`text-xl font-black tracking-tighter ${colorClass}`}>
-          {current}{unit}
+          {displayValue ?? `${current}${unit}`}
         </span>
       </div>
 
       <div className="relative overflow-hidden" style={{ height: H }}>
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full h-full"
-          preserveAspectRatio="none"
-        >
-          {/* Fill area */}
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full" preserveAspectRatio="none">
+          <path d={buildFill(values, W, H, maxValue)} fill={fillColor} opacity={0.25} />
           <path
-            d={buildFill(values, W, H)}
-            fill={fillColor}
-            opacity={0.25}
-          />
-          {/* Stroke line */}
-          <path
-            d={buildPath(values, W, H)}
+            d={buildPath(values, W, H, maxValue)}
             fill="none"
             stroke={fillColor}
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          {/* Current value dot */}
           {values.length > 0 && (
             <circle
               cx={W}
-              cy={H - (values[values.length - 1] / 100) * H}
+              cy={H - (values[values.length - 1] / Math.max(maxValue, 1)) * H}
               r="2.5"
               fill={fillColor}
             />
@@ -101,65 +98,90 @@ function Sparkline({ values, color, fillColor, label, current, icon, unit = "%" 
         </svg>
       </div>
 
-      {/* Mini bar */}
       <div className="mt-2 h-0.5 bg-[#F5F1EE] rounded-full overflow-hidden">
         <div
           className="h-full transition-all duration-500 rounded-full"
-          style={{ width: `${current}%`, background: fillColor }}
+          style={{
+            width: `${Math.min((current / Math.max(maxValue, 1)) * 100, 100)}%`,
+            background: fillColor,
+          }}
         />
       </div>
     </div>
   );
 }
 
-interface GlobalMetricsPanelProps {
-  workers: WireWorker[];
+function MetricNumber({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white border border-[#120B09]/5 rounded-sm p-4 hover:border-[#EF8354]/20 transition-all">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="p-1.5 bg-[#F5F1EE] rounded-sm">{icon}</div>
+        <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+          {label}
+        </p>
+      </div>
+      <p className="text-3xl font-black tracking-tighter text-[#120B09]">{value}</p>
+    </div>
+  );
 }
 
-export function GlobalMetricsPanel({ workers }: GlobalMetricsPanelProps) {
+export function GlobalMetricsPanel({ workers }: { workers: WireWorker[] }) {
   const [history, setHistory] = useState<MetricSnapshot[]>(() =>
-    Array.from({ length: HISTORY_LEN }, () => ({ benchmark: 0, busy: 0, efficiency: 0, battery: 0 }))
+    Array.from({ length: HISTORY_LEN }, () => ({
+      cpuPressure: 0,
+      memoryPoolGb: 0,
+      gpuUsage: 0,
+      storageUsage: 0,
+      activeWorkers: 0,
+    }))
   );
 
-  const activeWorkers = workers.filter((w) => w.status !== "offline");
+  const activeWorkers = workers.filter((worker) => worker.status !== "offline");
   const avgNumber = (values: number[]) =>
     Math.round(values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1));
+  const sumNumber = (values: number[]) =>
+    Math.round(values.reduce((sum, value) => sum + value, 0));
 
-  const current: MetricSnapshot = {
-    benchmark: avgNumber(activeWorkers.map((worker) => worker.benchmark?.normalizedScore ?? 0)),
-    busy: avgNumber(activeWorkers.map((worker) => worker.metrics.busyRatio * 100)),
-    efficiency: avgNumber(
+  const current = useMemo<MetricSnapshot>(() => ({
+    cpuPressure: avgNumber(activeWorkers.map((worker) => worker.metrics.busyRatio * 100)),
+    memoryPoolGb: sumNumber(
       activeWorkers
-        .map((worker) => worker.metrics.taskEfficiency)
+        .map((worker) => worker.telemetry?.deviceMemoryGb)
         .filter((value): value is number => typeof value === "number")
     ),
-    battery: avgNumber(
+    gpuUsage: 0,
+    storageUsage: avgNumber(
       activeWorkers
-        .map((worker) => worker.telemetry?.battery?.level)
+        .map((worker) => worker.telemetry?.storage?.usagePercent)
         .filter((value): value is number => typeof value === "number")
     ),
-  };
+    activeWorkers: activeWorkers.length,
+  }), [activeWorkers]);
 
-  // Push new snapshot on interval or when workers change
   const lastRef = useRef<MetricSnapshot>(current);
   useEffect(() => {
     const id = setInterval(() => {
-      setHistory((prev) => {
-        const snap = lastRef.current;
-        return [...prev.slice(1 - HISTORY_LEN), snap];
-      });
+      setHistory((prev) => [...prev.slice(1), lastRef.current]);
     }, 1000);
     return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
     lastRef.current = current;
-  });
+  }, [current]);
 
-  const benchmarkHistory = history.map((h) => h.benchmark);
-  const busyHistory = history.map((h) => h.busy);
-  const efficiencyHistory = history.map((h) => h.efficiency);
-  const batteryHistory = history.map((h) => h.battery);
+  const cpuHistory = history.map((snap) => snap.cpuPressure);
+  const memoryHistory = history.map((snap) => snap.memoryPoolGb);
+  const gpuHistory = history.map((snap) => snap.gpuUsage);
+  const maxMemoryPool = Math.max(...memoryHistory, current.memoryPoolGb, 1);
 
   return (
     <section className="mb-10">
@@ -172,44 +194,45 @@ export function GlobalMetricsPanel({ workers }: GlobalMetricsPanelProps) {
             Global Metrics
           </h2>
         </div>
-        <p className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif] font-bold uppercase tracking-wider">
-          {activeWorkers.length} active node{activeWorkers.length !== 1 ? "s" : ""}
-        </p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <Sparkline
-          values={benchmarkHistory}
+          values={cpuHistory}
           color="text-[#EF8354]"
           fillColor="#EF8354"
-          label="Benchmark Avg"
-          current={current.benchmark}
-          icon={<Gauge size={13} className="text-[#EF8354]" />}
-          unit=""
+          label="Global CPU Pressure"
+          current={current.cpuPressure}
+          icon={<Cpu size={13} className="text-[#EF8354]" />}
         />
         <Sparkline
-          values={busyHistory}
+          values={memoryHistory}
           color="text-[#6f0600]"
           fillColor="#6f0600"
-          label="Busy Ratio"
-          current={current.busy}
-          icon={<Activity size={13} className="text-[#6f0600]" />}
+          label="Memory Pool"
+          current={current.memoryPoolGb}
+          icon={<Database size={13} className="text-[#6f0600]" />}
+          unit=" GB"
+          maxValue={maxMemoryPool}
         />
         <Sparkline
-          values={efficiencyHistory}
+          values={gpuHistory}
           color="text-[#2D6A4F]"
           fillColor="#2D6A4F"
-          label="Task Efficiency"
-          current={current.efficiency}
+          label="GPU Usage"
+          current={current.gpuUsage}
           icon={<Zap size={13} className="text-[#2D6A4F]" />}
+          displayValue="—"
         />
-        <Sparkline
-          values={batteryHistory}
-          color="text-blue-600"
-          fillColor="#2563eb"
-          label="Battery Avg"
-          current={current.battery}
-          icon={<BatteryCharging size={13} className="text-blue-600" />}
+        <MetricNumber
+          label="Storage Usage"
+          value={current.storageUsage > 0 ? `${current.storageUsage}%` : "—"}
+          icon={<HardDrive size={13} className="text-blue-600" />}
+        />
+        <MetricNumber
+          label="Active Workers"
+          value={String(current.activeWorkers)}
+          icon={<Users size={13} className="text-[#6f0600]" />}
         />
       </div>
     </section>

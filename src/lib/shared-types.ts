@@ -39,6 +39,11 @@ export interface WorkerTelemetry {
     level?: number;
     charging?: boolean;
   };
+  storage?: {
+    usageBytes?: number;
+    quotaBytes?: number;
+    usagePercent?: number;
+  };
 }
 
 export interface WorkerBenchmark {

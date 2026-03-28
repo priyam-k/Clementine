@@ -63,6 +63,7 @@ function mergeTelemetry(
     screen: incoming.screen ? { ...current.screen, ...incoming.screen } : current.screen,
     network: incoming.network ? { ...current.network, ...incoming.network } : current.network,
     battery: incoming.battery ? { ...current.battery, ...incoming.battery } : current.battery,
+    storage: incoming.storage ? { ...current.storage, ...incoming.storage } : current.storage,
   };
 }
 

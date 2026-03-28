@@ -9,9 +9,10 @@ import type {
   FractalJobConfig,
   WireTask,
   FractalTileInput,
+  FractalTileResultPayload,
 } from "@/lib/shared-types";
-import { computeFractalTileAsync } from "@/lib/fractal-compute";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
+import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 
 // ─── Public state shape ───────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ export interface HostSessionState {
   session: WireSession | null;
   workers: WireWorker[];
   jobs: WireJob[];
+  fractalTiles: FractalTileResultPayload[];
   latestResult: WireResult | null;
   submitJob: (command: string) => void;
   submitFractalJob: (config: FractalJobConfig) => void;
@@ -36,6 +38,7 @@ export function useHostSession(): HostSessionState {
   const [session, setSession] = useState<WireSession | null>(null);
   const [workers, setWorkers] = useState<WireWorker[]>([]);
   const [jobs, setJobs] = useState<WireJob[]>([]);
+  const [fractalTiles, setFractalTiles] = useState<FractalTileResultPayload[]>([]);
   const [latestResult, setLatestResult] = useState<WireResult | null>(null);
 
   // Persist session code across reconnects
@@ -54,8 +57,9 @@ export function useHostSession(): HostSessionState {
       if (task.jobType === "fractal-render") {
         socket.emit("task:progress", { taskId: task.id, progress: 5 });
         const input = task.inputPayload as unknown as FractalTileInput;
-        const output = await computeFractalTileAsync(input, (pct) => {
-          socket.emit("task:progress", { taskId: task.id, progress: 10 + Math.floor(pct * 0.89) });
+        socket.emit("task:progress", { taskId: task.id, progress: 10 });
+        const output = await computeFractalTileMaxCpu(input, (progress) => {
+          socket.emit("task:progress", { taskId: task.id, progress: 10 + Math.floor(progress * 0.9) });
         });
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
@@ -106,6 +110,7 @@ export function useHostSession(): HostSessionState {
       setSession(sess);
       setWorkers(ws);
       setJobs(js);
+      setFractalTiles([]);
     });
 
     // Live worker list
@@ -130,6 +135,14 @@ export function useHostSession(): HostSessionState {
     socket.on("job:complete", ({ job, result }) => {
       setJobs((prev) => prev.map((j) => (j.id === job.id ? job : j)));
       setLatestResult(result);
+    });
+
+    socket.on("fractal:tile:result", (payload) => {
+      setFractalTiles((prev) => {
+        const next = prev.filter((tile) => tile.taskId !== payload.taskId);
+        next.push(payload);
+        return next;
+      });
     });
 
     // Host also executes tasks assigned to it (it's also a worker node)
@@ -183,6 +196,7 @@ export function useHostSession(): HostSessionState {
       s.off("job:created");
       s.off("job:update");
       s.off("job:complete");
+      s.off("fractal:tile:result");
       s.off("task:assigned");
       s.off("connect");
       s.off("disconnect");
@@ -205,5 +219,5 @@ export function useHostSession(): HostSessionState {
     if (!socket.connected) socket.connect();
   }, []);
 
-  return { isConnected, session, workers, jobs, latestResult, submitJob, submitFractalJob, reconnect };
+  return { isConnected, session, workers, jobs, fractalTiles, latestResult, submitJob, submitFractalJob, reconnect };
 }

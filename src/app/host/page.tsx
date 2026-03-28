@@ -15,7 +15,7 @@ import { GlobalMetricsPanel } from "@/components/host/GlobalMetricsPanel";
 import { useHostSession } from "@/hooks/useHostSession";
 import type { Job, Session, CommandEntry } from "@/lib/types";
 import type { WireJob, WireSession, FractalJobConfig } from "@/lib/shared-types";
-import { Activity, Cpu, Users, CheckCircle2, WifiOff, Loader2, Layers } from "lucide-react";
+import { Users, HardDrive, WifiOff, Loader2, Layers } from "lucide-react";
 
 // Build fractal config from a difficulty value (1-100, log-linear scale)
 // Difficulty 1  → 600×400 px, 128 iter  ≈ 5–15 s  (1 worker)
@@ -25,7 +25,7 @@ function buildFractalConfig(difficulty: number): FractalJobConfig {
   const t = (difficulty - 1) / 99; // 0→1
   const width = Math.round(600 + t * 3000);               // 600 → 3600
   const height = Math.round((600 + t * 3000) * (2 / 3));  // 400 → 2400
-  const maxIterations = Math.round(128 * Math.pow(32, t)); // 128 → 4096
+  const maxIterations = Math.round(160 * Math.pow(40, t)); // 160 → 6400
   return {
     fractalType: "mandelbrot",
     width,
@@ -35,7 +35,7 @@ function buildFractalConfig(difficulty: number): FractalJobConfig {
     xMax: 1.0,
     yMin: -1.25,
     yMax: 1.25,
-    tileSize: 100,
+    tileSize: 160,
   };
 }
 
@@ -106,10 +106,10 @@ function wireSessionToComp(s: WireSession, workerCount: number): Session {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function HostPage() {
-  const { isConnected, session, workers, jobs, submitJob, submitFractalJob, reconnect } =
+  const { isConnected, session, workers, jobs, fractalTiles, submitJob, submitFractalJob, reconnect } =
     useHostSession();
 
-  const [difficulty, setDifficulty] = useState(25);
+  const [difficulty, setDifficulty] = useState(40);
   const fractalConfig = useMemo(() => buildFractalConfig(difficulty), [difficulty]);
 
   // Adapt wire types to component prop shapes
@@ -131,25 +131,14 @@ export default function HostPage() {
 
   // Derive stat card data from live state
   const activeWorkers = workers.filter((w) => w.status !== "offline");
-  const workingWorkers = workers.filter((w) => w.status === "working");
   const runningJobs = compJobs.filter((j) => j.status === "running");
-  const totalTasksDone = compJobs.reduce((sum, j) => sum + j.completedSubtasks, 0);
-  const avgBenchmark =
+  const avgStorageUsage =
     activeWorkers.length > 0
       ? Math.round(
-          activeWorkers.reduce((s, w) => s + (w.benchmark?.normalizedScore ?? 0), 0) / activeWorkers.length
+          activeWorkers.reduce((sum, worker) => sum + (worker.telemetry?.storage?.usagePercent ?? 0), 0) /
+            activeWorkers.length
         )
       : 0;
-  const avgBusyRatio =
-    activeWorkers.length > 0
-      ? Math.round(
-          (activeWorkers.reduce((s, w) => s + w.metrics.busyRatio, 0) / activeWorkers.length) * 100
-        )
-      : 0;
-  const fleetThroughput = activeWorkers.reduce(
-    (sum, worker) => sum + (worker.metrics.renderThroughput ?? 0),
-    0
-  );
 
   const activeJob = runningJobs.filter((j) => j.id !== jobs.find(j2 => j2.jobType === "fractal-render")?.id)[0] ?? null;
   const lastCompletedJob = compJobs.find((j) => j.status === "completed" && jobs.find(j2 => j2.id === j.id)?.jobType !== "fractal-render") ?? null;
@@ -183,13 +172,6 @@ export default function HostPage() {
 
   const statCards = [
     {
-      label: "Avg Benchmark",
-      value: avgBenchmark > 0 ? String(avgBenchmark) : "—",
-      sub: `${activeWorkers.length} active worker${activeWorkers.length !== 1 ? "s" : ""}`,
-      icon: Cpu,
-      accent: "text-[#EF8354]",
-    },
-    {
       label: "Active Workers",
       value: String(activeWorkers.length),
       sub: `${workers.length - activeWorkers.length} offline`,
@@ -197,18 +179,11 @@ export default function HostPage() {
       accent: "text-[#6f0600]",
     },
     {
-      label: "Fleet Busy",
-      value: `${avgBusyRatio}%`,
-      sub: activeWorkers.length > 0 ? `${workingWorkers.length} workers occupied` : "No active workers",
-      icon: Activity,
+      label: "Storage Usage",
+      value: avgStorageUsage > 0 ? `${avgStorageUsage}%` : "—",
+      sub: "Avg browser storage usage",
+      icon: HardDrive,
       accent: "text-[#EF8354]",
-    },
-    {
-      label: "Throughput",
-      value: fleetThroughput > 0 ? `${fleetThroughput.toLocaleString()} px/s` : "—",
-      sub: `${totalTasksDone} completed tasks`,
-      icon: CheckCircle2,
-      accent: "text-green-700",
     },
   ];
 
@@ -334,7 +309,7 @@ export default function HostPage() {
         )}
 
         {/* Stat cards */}
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
           {statCards.map((stat) => {
             const Icon = stat.icon;
             return (
@@ -380,7 +355,7 @@ export default function HostPage() {
         {/* Fractal canvas — shown once a fractal-render job has been submitted */}
         {fractalJob && (
           <section className="mb-10">
-            <FractalCanvas job={fractalJob} />
+            <FractalCanvas key={fractalJob.id} job={fractalJob} tiles={fractalTiles} />
           </section>
         )}
 
@@ -394,7 +369,7 @@ export default function HostPage() {
 
         {/* Worker grid */}
         <section className="mb-10">
-          <WorkerGrid workers={workers} />
+          <WorkerGrid workers={workers} joinUrl={session?.joinUrl} />
         </section>
 
         {/* Task queue + Command history */}

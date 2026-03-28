@@ -1,65 +1,45 @@
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
-import { getSocket } from "@/hooks/useSocket";
+import { useEffect, useRef, useState } from "react";
 import type { FractalTileResultPayload, WireJob } from "@/lib/shared-types";
 import { Cpu, Clock, CheckCircle2, Zap } from "lucide-react";
 
 interface FractalCanvasProps {
   /** The active fractal-render WireJob (null if none) */
   job: WireJob | null;
+  tiles: FractalTileResultPayload[];
 }
 
-export function FractalCanvas({ job }: FractalCanvasProps) {
+export function FractalCanvas({ job, tiles }: FractalCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [tilesReceived, setTilesReceived] = useState(0);
   const [imageDims, setImageDims] = useState<{ w: number; h: number } | null>(null);
   const [lastWorker, setLastWorker] = useState<string>("");
   const [avgTileMs, setAvgTileMs] = useState(0);
   const [totalMs, setTotalMs] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const tileMsAccRef = useRef<number[]>([]);
-
-  // Reset canvas when a new job starts
+  const paintedTaskIdsRef = useRef<Set<string>>(new Set());
   const activeJobId = job?.id ?? null;
-  const prevJobIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (activeJobId !== prevJobIdRef.current) {
-      prevJobIdRef.current = activeJobId;
-      setTilesReceived(0);
-      setImageDims(null);
-      setLastWorker("");
-      setAvgTileMs(0);
-      setTotalMs(0);
-      startTimeRef.current = null;
-      tileMsAccRef.current = [];
-
-      // Clear canvas
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        ctx?.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    }
-  }, [activeJobId]);
 
   useEffect(() => {
     if (!activeJobId) return;
-    const socket = getSocket();
 
-    const handleTile = (payload: FractalTileResultPayload) => {
-      if (payload.jobId !== activeJobId) return;
+    const nextTiles = tiles.filter(
+      (payload) =>
+        payload.jobId === activeJobId && !paintedTaskIdsRef.current.has(payload.taskId)
+    );
 
-      // Set canvas size from first tile
+    if (nextTiles.length === 0) return;
+
+    for (const payload of nextTiles) {
+      paintedTaskIdsRef.current.add(payload.taskId);
+
       if (!startTimeRef.current) {
         startTimeRef.current = Date.now();
         setImageDims({ w: payload.imageWidth, h: payload.imageHeight });
       }
 
-      // Paint tile onto canvas
       const canvas = canvasRef.current;
       if (canvas) {
-        // Ensure canvas has correct dimensions
         if (canvas.width !== payload.imageWidth || canvas.height !== payload.imageHeight) {
           canvas.width = payload.imageWidth;
           canvas.height = payload.imageHeight;
@@ -75,18 +55,14 @@ export function FractalCanvas({ job }: FractalCanvasProps) {
         }
       }
 
-      // Update stats
       tileMsAccRef.current.push(payload.durationMs);
-      const acc = tileMsAccRef.current;
-      setAvgTileMs(Math.round(acc.reduce((s, v) => s + v, 0) / acc.length));
       setLastWorker(payload.workerName);
-      setTilesReceived((n) => n + 1);
-      setTotalMs(Date.now() - (startTimeRef.current ?? Date.now()));
-    };
+    }
 
-    socket.on("fractal:tile:result", handleTile);
-    return () => { socket.off("fractal:tile:result", handleTile); };
-  }, [activeJobId]);
+    const acc = tileMsAccRef.current;
+    setAvgTileMs(Math.round(acc.reduce((sum, value) => sum + value, 0) / acc.length));
+    setTotalMs(Date.now() - (startTimeRef.current ?? Date.now()));
+  }, [activeJobId, tiles]);
 
   const totalTiles = job?.tasks.length ?? 0;
   const completedTiles = job?.tasks.filter((t) => t.status === "completed").length ?? 0;

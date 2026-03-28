@@ -71,6 +71,26 @@ async function getBatterySnapshot(nav: NavigatorWithDeviceMemory): Promise<Worke
   }
 }
 
+async function getStorageSnapshot(): Promise<WorkerTelemetry["storage"] | undefined> {
+  try {
+    if (!navigator.storage?.estimate) return undefined;
+    const estimate = await navigator.storage.estimate();
+    const usageBytes = estimate.usage;
+    const quotaBytes = estimate.quota;
+
+    return {
+      usageBytes,
+      quotaBytes,
+      usagePercent:
+        usageBytes != null && quotaBytes != null && quotaBytes > 0
+          ? Math.round((usageBytes / quotaBytes) * 100)
+          : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function collectBrowserTelemetry(fallbackDevice?: string): Promise<{
   telemetry: WorkerTelemetry;
   deviceLabel: string;
@@ -108,8 +128,12 @@ export async function collectBrowserTelemetry(fallbackDevice?: string): Promise<
       : undefined,
   };
 
-  const battery = await getBatterySnapshot(nav);
+  const [battery, storage] = await Promise.all([
+    getBatterySnapshot(nav),
+    getStorageSnapshot(),
+  ]);
   if (battery) telemetry.battery = battery;
+  if (storage) telemetry.storage = storage;
 
   const deviceLabel = deriveDeviceLabel(telemetry, fallbackDevice);
   telemetry.deviceLabel = deviceLabel;
@@ -126,7 +150,10 @@ export async function collectTelemetryHeartbeat(): Promise<{
   }
 
   const nav = navigator as NavigatorWithDeviceMemory;
-  const battery = await getBatterySnapshot(nav);
+  const [battery, storage] = await Promise.all([
+    getBatterySnapshot(nav),
+    getStorageSnapshot(),
+  ]);
 
   return {
     sentAt: Date.now(),
@@ -140,6 +167,7 @@ export async function collectTelemetryHeartbeat(): Promise<{
           }
         : undefined,
       battery,
+      storage,
     },
   };
 }

@@ -2,8 +2,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { connectSocket, disconnectSocket, getSocket } from "./useSocket";
 import type { WireTask, FractalTileInput } from "@/lib/shared-types";
-import { computeFractalTileAsync } from "@/lib/fractal-compute";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
+import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 
 // ─── Mock compute executor ───────────────────────────────────────────────────
 // Simulates realistic work in the browser with progress steps
@@ -61,11 +61,10 @@ async function executeFractalTileTask(
   onProgress(5);
 
   const input = task.inputPayload as unknown as FractalTileInput;
+  onProgress(10);
 
-  // Async chunked computation — yields every 8 rows so socket events keep flowing
-  const output = await computeFractalTileAsync(input, (pct) => {
-    // Map tile row progress (0-100) to overall progress range (10-99)
-    onProgress(10 + Math.floor(pct * 0.89));
+  const output = await computeFractalTileMaxCpu(input, (progress) => {
+    onProgress(10 + Math.floor(progress * 0.9));
   });
 
   onProgress(100);
@@ -162,9 +161,8 @@ export function useWorkerSession(): WorkerSessionState {
       }
     };
 
-    socket.on("task:assigned", handleTaskAssigned);
-
-    socket.on("connect", () => {
+    // Named handlers so cleanup removes only these (not the once() from joinSession)
+    const handleConnect = () => {
       setConnectionState("connected");
       const pendingJoin = joinProfileRef.current;
       if (pendingJoin) {
@@ -175,12 +173,23 @@ export function useWorkerSession(): WorkerSessionState {
         });
         void publishProfile(pendingJoin.device);
       }
-    });
+    };
 
-    socket.on("disconnect", () => {
+    const handleDisconnect = () => {
       setConnectionState("disconnected");
       setWorkerStatus("offline");
-    });
+    };
+
+    socket.on("task:assigned", handleTaskAssigned);
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+
+    // If socket is already connected (Strict Mode re-mount or hot reload),
+    // immediately re-join if we have pending join info
+    if (socket.connected && joinProfileRef.current) {
+      handleConnect();
+    }
+
     // ── Periodic heartbeat telemetry ─────────────────────────────────────────
     const metricsInterval = setInterval(async () => {
       if (!socket.connected) return;
@@ -190,8 +199,8 @@ export function useWorkerSession(): WorkerSessionState {
 
     return () => {
       socket.off("task:assigned", handleTaskAssigned);
-      socket.off("connect");
-      socket.off("disconnect");
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
       clearInterval(metricsInterval);
     };
   }, []);
@@ -204,7 +213,8 @@ export function useWorkerSession(): WorkerSessionState {
 
     const socket = connectSocket();
 
-    const doJoin = () => {
+    if (socket.connected) {
+      // Already connected — join immediately
       socket.emit("worker:join", { sessionCode: code, name, device });
       setConnectionState("connected");
       setWorkerStatus("idle");
@@ -215,13 +225,9 @@ export function useWorkerSession(): WorkerSessionState {
           profileSentRef.current = `${socket.id}:${device}`;
         }
       })();
-    };
-
-    if (socket.connected) {
-      doJoin();
-    } else {
-      socket.once("connect", doJoin);
     }
+    // If not yet connected, the on("connect") handler in useEffect
+    // will pick up joinProfileRef.current and emit worker:join
   }, []);
 
   const leaveSession = useCallback(() => {

@@ -6,9 +6,10 @@ import { WorkerCard } from "./WorkerCard";
 
 interface WorkerGridProps {
   workers: WireWorker[];
+  joinUrl?: string;
 }
 
-export function WorkerGrid({ workers }: WorkerGridProps) {
+export function WorkerGrid({ workers, joinUrl }: WorkerGridProps) {
   const activeCount = workers.filter((w) => w.status !== "offline").length;
   const workingCount = workers.filter((w) => w.status === "working").length;
 
@@ -51,8 +52,13 @@ export function WorkerGrid({ workers }: WorkerGridProps) {
           <WorkerCard key={worker.id} worker={worker} />
         ))}
 
-        {/* Add worker slot */}
-        <Link href="/join" className="bg-[#F5F1EE]/60 border-2 border-dashed border-[#120B09]/10 rounded-sm p-5 flex flex-col items-center justify-center gap-3 group hover:bg-[#EDE7E3]/60 hover:border-[#EF8354]/20 transition-all">
+        {/* Add worker slot — opens in a new tab so the host socket isn't shared */}
+        <a
+          href={joinUrl || "/join"}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-[#F5F1EE]/60 border-2 border-dashed border-[#120B09]/10 rounded-sm p-5 flex flex-col items-center justify-center gap-3 group hover:bg-[#EDE7E3]/60 hover:border-[#EF8354]/20 transition-all"
+        >
           <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
             <Plus size={16} className="text-[#EF8354]" />
           </div>
@@ -62,7 +68,7 @@ export function WorkerGrid({ workers }: WorkerGridProps) {
               Share join link or QR
             </p>
           </div>
-        </Link>
+        </a>
       </div>
     </section>
   );
