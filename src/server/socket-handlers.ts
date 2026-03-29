@@ -26,6 +26,8 @@ import {
   getTasksForJob,
   getHostSocketForSession,
   createTask,
+  releaseJobTasks,
+  removeWorker,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -72,6 +74,17 @@ function mergeTelemetry(
 
 export function setupSocketHandlers(io: IO, port: number) {
   const localIP = getLocalIP();
+
+  // Throttle job:update broadcasts during task:progress — at most once per 150ms per job
+  const progressBroadcastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function scheduleJobUpdate(jobId: string, hostSocketId: string) {
+    if (progressBroadcastTimers.has(jobId)) return;
+    progressBroadcastTimers.set(jobId, setTimeout(() => {
+      progressBroadcastTimers.delete(jobId);
+      const j = getJob(jobId);
+      if (j) io.to(hostSocketId).emit("job:update", toWireJob(j));
+    }, 150));
+  }
 
   const persistJobAndTasks = (jobId: string) => {
     const job = getJob(jobId);
@@ -320,16 +333,10 @@ export function setupSocketHandlers(io: IO, port: number) {
         status: "working",
         lastHeartbeatAt: Date.now(),
       });
-      if (progressTask) persistJobAndTasks(progressTask.jobId);
-
-      // Notify host
+      // Notify host (throttled — no need to persist to DB on every progress tick)
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
-      if (hostSocketId) {
-        const task = getTask(taskId);
-        if (task) {
-          const job = getJob(task.jobId);
-          if (job) io.to(hostSocketId).emit("job:update", toWireJob(job));
-        }
+      if (hostSocketId && progressTask) {
+        scheduleJobUpdate(progressTask.jobId, hostSocketId);
       }
     });
 
@@ -477,6 +484,10 @@ export function setupSocketHandlers(io: IO, port: number) {
 
           const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
           if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
+
+          // Release task objects from memory after all emits — they're persisted to Mongo
+          // and the client has the final snapshot. Job record stays for session history.
+          releaseJobTasks(finishedJob.id);
         })();
       } else {
         // Update job progress for host
@@ -522,6 +533,9 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Worker disconnected
       const offlineWorker = markWorkerOffline(socket.id);
       if (offlineWorker) {
+        // Remove from memory after 30s — long enough for the UI to show the offline state
+        setTimeout(() => removeWorker(offlineWorker.id), 30_000);
+
         const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
         if (hostSocketId) {
           const workers = getWorkersForSession(offlineWorker.sessionCode).map(toWireWorker);

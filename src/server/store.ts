@@ -200,6 +200,18 @@ export function updateTask(id: string, updates: Partial<ServerTask>): ServerTask
   return updated;
 }
 
+export function releaseJobTasks(jobId: string): void {
+  const job = jobs.get(jobId);
+  if (!job) return;
+  for (const tid of job.taskIds) {
+    tasks.delete(tid);
+  }
+}
+
+export function removeWorker(workerId: string): void {
+  workers.delete(workerId);
+}
+
 // ─── Wire serializers ─────────────────────────────────────────────────────────
 
 export function toWireWorker(w: ServerWorker): WireWorker {
