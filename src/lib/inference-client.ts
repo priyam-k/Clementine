@@ -3,7 +3,12 @@
 import type { WireTask } from "@/lib/shared-types";
 
 function sanitizeModelText(content: string): string {
-  return content
+  const withoutDanglingClosingTag =
+    content.includes("</think>") && !content.includes("<think>")
+      ? content.slice(content.indexOf("</think>") + "</think>".length)
+      : content;
+
+  return withoutDanglingClosingTag
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/<\/?think>/gi, "")
     .trim();

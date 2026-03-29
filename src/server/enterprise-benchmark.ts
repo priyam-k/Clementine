@@ -5,6 +5,7 @@ import type {
 } from "../lib/shared-types";
 import type { ServerJob } from "./types";
 import { writeMarkdownArtifact } from "./results-writer";
+import { generateGeminiText } from "./gemini";
 
 interface EnterpriseTaskSpec {
   title: string;
@@ -463,7 +464,11 @@ function extractMarkdownReport(text: string): string {
 }
 
 function sanitizeModelText(text: string): string {
-  const sanitized = text
+  const withoutDanglingClosingTag = text.includes("</think>") && !text.includes("<think>")
+    ? text.slice(text.indexOf("</think>") + "</think>".length)
+    : text;
+
+  const sanitized = withoutDanglingClosingTag
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/<\/?think>/gi, "")
     .replace(/^\s*The user has provided[\s\S]*?(?=#{1,6}\s|[\[{])/i, "")
@@ -723,52 +728,46 @@ export async function synthesizeEnterpriseMarkdown(
   const fallback = buildFallbackMarkdown(job, vendors, taskSummaries);
 
   try {
-    const markdown = await callK2([
-      {
-        role: "system",
-        content:
-          [
-            "You are Clementine's executive synthesis model.",
-            "Produce a polished markdown report only.",
-            "Use only the provided vendor profile data and analyst task summaries as evidence.",
-            "Do not mention prompts, parsing, instructions, JSON schemas, hidden reasoning, or <think> content.",
-            "Do not fabricate external facts, market claims, or compliance assertions that are not supported by the supplied data.",
-            "If only one vendor is available, say that no second recommendation is available rather than inventing one.",
-            "Use headings, ordered lists, unordered lists, emphasis, and concise business language.",
-          ].join(" "),
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          jobTitle: job.title,
-          originalPrompt: job.rawPrompt,
-          criteria: DEFAULT_CRITERIA,
-          vendors: vendors.map((vendor) => ({
-            name: vendor.name,
-            size: vendor.size,
-            costProfile: vendor.costProfile,
-            complianceMaturity: vendor.complianceMaturity,
-            reliability: vendor.reliability,
-            scalability: vendor.scalability,
-            risk: vendor.risk,
-            strengths: vendor.strengths,
-            weaknesses: vendor.weaknesses,
-            notes: vendor.notes,
-          })),
-          taskSummaries,
-          sections: [
-            "Title",
-            "Executive Summary",
-            "Evaluation Criteria",
-            "Vendor Overview",
-            "Role-Based Findings",
-            "Ranked Recommendations",
-            "Top 2 Recommendation",
-            "Risks / Tradeoffs",
-          ],
-        }),
-      },
-    ]);
+    const markdown = await generateGeminiText({
+      systemInstruction: [
+        "You are Clementine's executive synthesis model.",
+        "Produce one clean user-facing markdown report.",
+        "Use only the provided vendor profile data and analyst task summaries as evidence.",
+        "Do not mention prompts, parsing, schemas, internal reasoning, hidden reasoning, or think tags.",
+        "Do not fabricate external facts, market claims, or compliance assertions not present in the supplied data.",
+        "If only one vendor is available, explicitly say that no second recommendation is available.",
+        "Use headings, ordered lists, unordered lists, emphasis, and concise business language.",
+      ].join(" "),
+      userPrompt: JSON.stringify({
+        jobTitle: job.title,
+        originalPrompt: job.rawPrompt,
+        criteria: DEFAULT_CRITERIA,
+        vendors: vendors.map((vendor) => ({
+          name: vendor.name,
+          size: vendor.size,
+          costProfile: vendor.costProfile,
+          complianceMaturity: vendor.complianceMaturity,
+          reliability: vendor.reliability,
+          scalability: vendor.scalability,
+          risk: vendor.risk,
+          strengths: vendor.strengths,
+          weaknesses: vendor.weaknesses,
+          notes: vendor.notes,
+        })),
+        taskSummaries,
+        sections: [
+          "Title",
+          "Executive Summary",
+          "Evaluation Criteria",
+          "Vendor Overview",
+          "Role-Based Findings",
+          "Ranked Recommendations",
+          "Top 2 Recommendation",
+          "Risks / Tradeoffs",
+        ],
+      }),
+      temperature: 0.2,
+    });
 
     const sanitizedMarkdown = sanitizeMarkdownArtifact(markdown);
     return sanitizedMarkdown || fallback;

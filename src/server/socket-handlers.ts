@@ -906,7 +906,12 @@ function normalizeBenchmarkConfig(
 }
 
 function sanitizeSummaryText(text: string): string {
-  return text
+  const withoutDanglingClosingTag =
+    text.includes("</think>") && !text.includes("<think>")
+      ? text.slice(text.indexOf("</think>") + "</think>".length)
+      : text;
+
+  return withoutDanglingClosingTag
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/<\/?think>/gi, "")
     .replace(/\bThe user says\b[\s\S]*/i, "")
