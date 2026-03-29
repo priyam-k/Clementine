@@ -25,15 +25,15 @@ import {
   toWireJob,
   getTasksForJob,
   getHostSocketForSession,
+  createTask,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
 import { reduceJobResults } from "./reducer";
-import { runJobGraph } from "./job-graph";
-import { executionBridges } from "./graph-nodes";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
 import { logTaskResult, persistJobSnapshot, persistTaskSnapshots } from "./mongo";
+import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -213,72 +213,61 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Send initial job to host
       socket.emit("job:created", toWireJob(job));
 
-      // Hand off to LangGraph orchestration (decompose → schedule → execute → reduce)
       (async () => {
         try {
-          await runJobGraph(io, {
-            sessionCode: session.code,
-            hostSocketId: socket.id,
-            jobId: job.id,
-          }, command);
+          updateJob(job.id, { status: "decomposing" });
+          persistJobAndTasks(job.id);
+          socket.emit("job:update", toWireJob(getJob(job.id)!));
+
+          const llmDecomposition = await decomposeWithLLM(command);
+
+          if (llmDecomposition?.tasks?.length) {
+            const taskIds = llmDecomposition.tasks.map((spec) =>
+              createTask({
+                jobId: job.id,
+                title: spec.title,
+                description: spec.description,
+                jobType: job.jobType,
+                status: "queued",
+                progress: 0,
+                inputPayload: {
+                  batchSize: Math.floor(1000 + spec.complexity * 1500),
+                  complexity: spec.complexity,
+                  operationType: job.jobType,
+                  dataLabel: spec.dataLabel ?? llmDecomposition.jobTitle,
+                  estimatedSeconds: spec.estimatedSeconds,
+                  seed: Math.floor(Math.random() * 100000),
+                },
+              }).id
+            );
+
+            updateJob(job.id, {
+              title: llmDecomposition.jobTitle,
+              taskIds,
+              normalizedCommand: JSON.stringify({
+                original: command,
+                resultSummaryHint: llmDecomposition.resultSummaryHint,
+              }),
+            });
+
+            console.log(
+              `[job] LLM produced ${taskIds.length} tasks for "${llmDecomposition.jobTitle}"`
+            );
+          } else {
+            const tasks = decomposeJob(getJob(job.id)!);
+            console.log(`[job] Heuristic decomposition created ${tasks.length} tasks`);
+          }
+
+          updateJob(job.id, { status: "running", startedAt: Date.now() });
+          persistJobAndTasks(job.id);
+          socket.emit("job:update", toWireJob(getJob(job.id)!));
+          runScheduler(io, session.code, socket.id);
         } catch (err) {
-          console.error(`[job-graph] job ${job.id} failed:`, err);
+          console.error(`[job] orchestration failed for ${job.id}:`, err);
           updateJob(job.id, { status: "failed" });
+          persistJobAndTasks(job.id);
           socket.emit("job:update", toWireJob(getJob(job.id)!));
         }
-      // Decompose — try LLM first, fall back to keyword heuristics
-      updateJob(job.id, { status: "decomposing" });
-      persistJobAndTasks(job.id);
-      socket.emit("job:update", toWireJob(getJob(job.id)!));
-
-      (async () => {
-        const llmResult = await decomposeWithLLM(command);
-
-        if (llmResult) {
-          console.log(`[llm-decomposer] ${llmResult.tasks.length} tasks for "${llmResult.jobTitle}"`);
-          // Update title to LLM-generated one
-          updateJob(job.id, {
-            title: llmResult.jobTitle,
-            // Store hint for result synthesis
-            normalizedCommand: JSON.stringify({ hint: llmResult.resultSummaryHint, original: command }),
-          });
-
-          // Create tasks from LLM spec
-          const { createTask, updateJob: upJob } = await import("./store");
-          const createdIds: string[] = [];
-          for (const spec of llmResult.tasks) {
-            const t = createTask({
-              jobId: job.id,
-              title: spec.title,
-              description: spec.description,
-              jobType: jobType,
-              status: "queued",
-              progress: 0,
-              inputPayload: {
-                batchSize: Math.floor(1000 + spec.complexity * 1500),
-                complexity: spec.complexity,
-                operationType: jobType,
-                dataLabel: spec.dataLabel ?? llmResult.jobTitle,
-                estimatedSeconds: spec.estimatedSeconds,
-                seed: Math.floor(Math.random() * 100000),
-              },
-            });
-            createdIds.push(t.id);
-          }
-          upJob(job.id, { taskIds: createdIds });
-          persistJobAndTasks(job.id);
-        } else {
-          // Fallback: keyword-based decomposition
-          await new Promise<void>((r) => setTimeout(r, 200));
-          const tasks = decomposeJob(getJob(job.id)!);
-          console.log(`[decomposer] ${tasks.length} tasks for job "${title}" (heuristic)`);
-          persistJobAndTasks(job.id);
-        }
-
-        updateJob(job.id, { status: "running", startedAt: Date.now() });
-        persistJobAndTasks(job.id);
-        socket.emit("job:update", toWireJob(getJob(job.id)!));
-        runScheduler(io, session.code, socket.id);
       })();
     });
 
@@ -447,21 +436,33 @@ export function setupSocketHandlers(io: IO, port: number) {
 
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
-        // If this job is graph-managed, signal the execute node to resume.
-        // The graph's reduce node handles job:complete emission.
-        const bridgeResolve = executionBridges.get(job.id);
-        if (bridgeResolve) {
-          bridgeResolve();
-          // Graph handles the rest — do not run the legacy reducer below.
-          return;
-        }
-
-        // Legacy path: fractal jobs (not graph-managed)
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
           const finalJob = getJob(job.id)!;
           const finalTasks = getTasksForJob(job.id);
           const result = reduceJobResults(finalJob, finalTasks);
+
+          if (finalJob.jobType !== "fractal-render") {
+            try {
+              const parsedMetadata = safeParseJobMetadata(finalJob.normalizedCommand);
+              const taskSummaries = finalTasks
+                .filter((t) => t.status === "completed")
+                .map((t) => summarizeTaskOutput(t));
+
+              result.summary = await synthesizeResult(
+                finalJob.title,
+                parsedMetadata.original ?? finalJob.rawPrompt,
+                taskSummaries,
+                parsedMetadata.resultSummaryHint ?? result.summary
+              );
+              result.outputLines = result.summary
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            } catch (err) {
+              console.warn(`[reducer] LLM synthesis failed for "${finalJob.title}":`, err);
+            }
+          }
 
           const finishedJob = updateJob(job.id, { status: "completed", result })!;
           persistJobAndTasks(finishedJob.id);
@@ -544,4 +545,38 @@ export function setupSocketHandlers(io: IO, port: number) {
       }
     });
   });
+}
+
+function safeParseJobMetadata(normalizedCommand: string): {
+  original?: string;
+  resultSummaryHint?: string;
+} {
+  try {
+    const parsed = JSON.parse(normalizedCommand) as {
+      original?: string;
+      resultSummaryHint?: string;
+    };
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function summarizeTaskOutput(task: ReturnType<typeof getTask> extends infer T ? NonNullable<T> : never) {
+  const output = task.outputPayload;
+  if (!output) return `${task.title}: completed`;
+
+  if (typeof output.summary === "string") {
+    return `${task.title}: ${output.summary}`;
+  }
+
+  if (typeof output.result === "string") {
+    return `${task.title}: ${output.result}`;
+  }
+
+  if (typeof output.durationMs === "number") {
+    return `${task.title}: completed in ${Math.round(output.durationMs)}ms`;
+  }
+
+  return `${task.title}: ${JSON.stringify(output)}`;
 }
