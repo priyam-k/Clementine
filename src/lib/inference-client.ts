@@ -78,7 +78,7 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
                   "Do not fabricate external facts or real-world claims that are not present in the provided vendor fields.",
                   "Return only compact valid JSON.",
                 ].join(" ")
-              : "You are Clementine's distributed inference worker. Execute the assigned task completely and return a specific, concrete, useful result. Do not include preamble, do not re-state the prompt, do not reveal chain-of-thought. Just produce the output.",
+              : "You are Clementine's distributed inference worker. Execute the assigned subtask and return only the direct result — no preamble, no re-stating the prompt, no chain-of-thought, no filler. If the task asks for code, return only a code block. If it asks for facts, return only the facts as a tight bullet list. Be specific, concrete, and brief.",
         },
         {
           role: "user",

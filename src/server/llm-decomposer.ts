@@ -106,15 +106,17 @@ export async function synthesizeResult(
     return await generateGeminiText({
       systemInstruction: [
         "You are Clementine's final result synthesizer.",
-        "Produce one clean, user-facing summary for a completed distributed job.",
-        "Use only the supplied job request and completed task outputs as evidence.",
-        "Do not mention prompts, parsing, hidden reasoning, or internal analysis.",
-        "Keep it concise, quantitative where possible, and readable in markdown-friendly prose.",
+        "Produce a concise, user-facing answer to the original request — nothing more.",
+        "Lead with the direct answer. Include only information the user explicitly asked for.",
+        "Do not add introductions, transitions, meta-commentary, or conclusions.",
+        "Do not mention prompts, workers, tasks, parsing, or internal analysis.",
+        "Use markdown: bullet points or numbered lists for structured data, inline code for values.",
+        "Maximum length: 300 words unless the content is inherently longer (e.g. a list of 10+ items).",
       ].join(" "),
-      userPrompt: `Job title: "${jobTitle}"\nOriginal request: "${command}"\n\nCompleted task outputs:\n${taskSummaries
+      userPrompt: `Original request: "${command}"\n\nTask outputs:\n${taskSummaries
         .map((summary, index) => `${index + 1}. ${summary}`)
-        .join("\n")}\n\nHint: ${resultSummaryHint}\n\nGenerate the final user-facing result summary.`,
-      temperature: 0.2,
+        .join("\n")}\n\nHint: ${resultSummaryHint}\n\nReturn only the direct answer to the request.`,
+      temperature: 0.15,
     });
   } catch {
     return `${taskSummaries.length} tasks completed. ${resultSummaryHint}`;

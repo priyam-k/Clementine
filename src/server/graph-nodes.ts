@@ -17,6 +17,7 @@ import {
   updateJob,
 } from "./store";
 import { decomposeWithLLM, type LLMDecomposition, synthesizeResult } from "./llm-decomposer";
+import { smartDecompose, outputsAreCode, assembleCodeResult } from "./smart-decomposer";
 import {
   buildEnterpriseResultSummary,
   buildEnterpriseTaskPayload,
@@ -93,6 +94,22 @@ export function makeDecomposeNode(io: IO) {
       return { decomposition };
     }
 
+    // ── Fast heuristic path — no LLM needed ──────────────────────────────────
+    const smart = smartDecompose(command);
+    if (smart) {
+      console.log(
+        `[graph:decompose] Smart heuristic produced ${smart.tasks.length} tasks (kind=${smart.kind}) — skipping LLM decomposition`
+      );
+      return {
+        decomposition: {
+          jobTitle: smart.jobTitle,
+          resultSummaryHint: smart.resultSummaryHint,
+          tasks: smart.tasks,
+        },
+      };
+    }
+
+    // ── LLM decomposition (only reached for ambiguous commands) ──────────────
     try {
       const model = getK2Model();
       const prompt = ChatPromptTemplate.fromMessages([
@@ -268,12 +285,25 @@ export function makeReduceNode(io: IO) {
     } else if (job.jobType !== "fractal-render") {
       try {
         const parsedMetadata = safeParseJobMetadata(job.normalizedCommand);
-        result.summary = await synthesizeResult(
-          job.title,
-          parsedMetadata.original ?? job.rawPrompt,
-          job.completionSamples,
-          parsedMetadata.resultSummaryHint ?? result.summary
-        );
+        const samples = job.completionSamples;
+
+        // Deterministic code assembly — no LLM call needed
+        if (outputsAreCode(samples)) {
+          const taskTitles = getTasksForJob(ctx.jobId)
+            .filter((t) => t.status === "completed")
+            .map((t) => t.title);
+          result.summary = assembleCodeResult(job.title, taskTitles, samples);
+          console.log("[graph:reduce] Code outputs detected — assembled without LLM synthesis");
+        } else {
+          // Prose synthesis via Gemini (only for non-code results)
+          result.summary = await synthesizeResult(
+            job.title,
+            parsedMetadata.original ?? job.rawPrompt,
+            samples,
+            parsedMetadata.resultSummaryHint ?? result.summary
+          );
+        }
+
         result.outputLines = result.summary
           .split("\n")
           .map((line) => line.trim())
