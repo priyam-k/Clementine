@@ -268,6 +268,8 @@ export function toWireTask(t: ServerTask): WireTask {
     jobType: t.jobType,
     status: t.status,
     assignedWorkerId: t.assignedWorkerId,
+    completedByWorkerId: t.completedByWorkerId,
+    completedByWorkerName: t.completedByWorkerName,
     inputPayload: t.inputPayload,
     outputPayload: t.outputPayload,
     startedAt: t.startedAt,

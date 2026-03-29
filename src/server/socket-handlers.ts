@@ -14,6 +14,7 @@ import {
   getWorkerBySocket,
   markWorkerOffline,
   getWorkersForSession,
+  getJobsForSession,
   createJob,
   getJob,
   getTask,
@@ -31,6 +32,7 @@ import { reduceJobResults } from "./reducer";
 import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
+import { logTaskResult, persistJobSnapshot, persistTaskSnapshots } from "./mongo";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -70,6 +72,20 @@ function mergeTelemetry(
 export function setupSocketHandlers(io: IO, port: number) {
   const localIP = getLocalIP();
 
+  const persistJobAndTasks = (jobId: string) => {
+    const job = getJob(jobId);
+    if (!job) return;
+    const wireJob = toWireJob(job);
+    void persistJobSnapshot({ ...wireJob, sessionCode: job.sessionCode });
+    void persistTaskSnapshots(
+      wireJob.tasks.map((task) => ({
+        ...task,
+        sessionCode: job.sessionCode,
+        jobType: wireJob.jobType,
+      }))
+    );
+  };
+
   io.on("connection", (socket: Sock) => {
     console.log(`[socket] connected: ${socket.id}`);
 
@@ -100,7 +116,7 @@ export function setupSocketHandlers(io: IO, port: number) {
       }
 
       const workers = getWorkersForSession(session.code).map(toWireWorker);
-      const jobs = [] as ReturnType<typeof toWireJob>[];
+      const jobs = getJobsForSession(session.code).map(toWireJob);
 
       socket.emit("session:state", {
         session: {
@@ -191,12 +207,14 @@ export function setupSocketHandlers(io: IO, port: number) {
       });
 
       console.log(`[job] Created "${title}" (${jobType}) for session ${session.code}`);
+      persistJobAndTasks(job.id);
 
       // Send initial job to host
       socket.emit("job:created", toWireJob(job));
 
       // Decompose — try LLM first, fall back to keyword heuristics
       updateJob(job.id, { status: "decomposing" });
+      persistJobAndTasks(job.id);
       socket.emit("job:update", toWireJob(getJob(job.id)!));
 
       (async () => {
@@ -234,14 +252,17 @@ export function setupSocketHandlers(io: IO, port: number) {
             createdIds.push(t.id);
           }
           upJob(job.id, { taskIds: createdIds });
+          persistJobAndTasks(job.id);
         } else {
           // Fallback: keyword-based decomposition
           await new Promise<void>((r) => setTimeout(r, 200));
           const tasks = decomposeJob(getJob(job.id)!);
           console.log(`[decomposer] ${tasks.length} tasks for job "${title}" (heuristic)`);
+          persistJobAndTasks(job.id);
         }
 
         updateJob(job.id, { status: "running", startedAt: Date.now() });
+        persistJobAndTasks(job.id);
         socket.emit("job:update", toWireJob(getJob(job.id)!));
         runScheduler(io, session.code, socket.id);
       })();
@@ -266,16 +287,20 @@ export function setupSocketHandlers(io: IO, port: number) {
       });
 
       console.log(`[fractal] Created job "${title}" for session ${session.code}`);
+      persistJobAndTasks(job.id);
       socket.emit("job:created", toWireJob(job));
 
       // Decompose immediately — no text-parsing delay needed
       updateJob(job.id, { status: "decomposing" });
+      persistJobAndTasks(job.id);
       socket.emit("job:update", toWireJob(getJob(job.id)!));
 
       const tasks = decomposeJob(getJob(job.id)!);
       console.log(`[fractal] ${tasks.length} tile tasks created`);
+      persistJobAndTasks(job.id);
 
       updateJob(job.id, { status: "running", startedAt: Date.now() });
+      persistJobAndTasks(job.id);
       socket.emit("job:update", toWireJob(getJob(job.id)!));
 
       runScheduler(io, session.code, socket.id);
@@ -286,11 +311,13 @@ export function setupSocketHandlers(io: IO, port: number) {
       const worker = getWorkerBySocket(socket.id);
       if (!worker) return;
 
+      const progressTask = getTask(taskId);
       updateTask(taskId, { status: "running", progress });
       updateWorker(worker.id, {
         status: "working",
         lastHeartbeatAt: Date.now(),
       });
+      if (progressTask) persistJobAndTasks(progressTask.jobId);
 
       // Notify host
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
@@ -330,9 +357,26 @@ export function setupSocketHandlers(io: IO, port: number) {
       updateTask(taskId, {
         status: "completed",
         progress: 100,
+        completedByWorkerId: worker.id,
+        completedByWorkerName: worker.name,
         outputPayload: storedOutput,
         completedAt: now,
       });
+      if (taskForType) persistJobAndTasks(taskForType.jobId);
+      if (taskForType) {
+        void logTaskResult({
+          taskId: taskForType.id,
+          jobId: taskForType.jobId,
+          title: taskForType.title,
+          jobType: taskForType.jobType,
+          sessionCode: worker.sessionCode,
+          workerId: worker.id,
+          workerName: worker.name,
+          status: "completed",
+          durationMs: taskDurationMs,
+          output: storedOutput,
+        });
+      }
 
       updateWorker(worker.id, {
         status: "idle",
@@ -385,6 +429,7 @@ export function setupSocketHandlers(io: IO, port: number) {
           status: "reducing",
           completedAt: now,
         })!;
+        persistJobAndTasks(completedJob.id);
 
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
@@ -416,6 +461,7 @@ export function setupSocketHandlers(io: IO, port: number) {
           }
 
           const finishedJob = updateJob(job.id, { status: "completed", result })!;
+          persistJobAndTasks(finishedJob.id);
           console.log(`[reducer] Job "${job.title}" completed`);
 
           if (hostSocketId) {
@@ -433,6 +479,7 @@ export function setupSocketHandlers(io: IO, port: number) {
         if (hostSocketId) {
           io.to(hostSocketId).emit("job:update", toWireJob(job));
         }
+        persistJobAndTasks(job.id);
 
         // Try to schedule next queued task to this now-idle worker
         if (hostSocketId) {
@@ -485,6 +532,7 @@ export function setupSocketHandlers(io: IO, port: number) {
             progress: 0,
           });
           const task = getTask(offlineWorker.currentTaskId);
+          if (task) persistJobAndTasks(task.jobId);
           if (task) {
             const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
             if (hostSocketId) runScheduler(io, offlineWorker.sessionCode, hostSocketId);
