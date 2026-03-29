@@ -199,9 +199,10 @@ export default function HeroMeshViz() {
     if (!canvas) return
     const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
 
+    const c = canvas;
     function resize() {
-      const p = canvas.parentElement; if (!p) return
-      canvas.width = p.clientWidth; canvas.height = p.clientHeight
+      const p = c.parentElement; if (!p) return
+      c.width = p.clientWidth; c.height = p.clientHeight
     }
     const ro = new ResizeObserver(resize)
     if (canvas.parentElement) ro.observe(canvas.parentElement)
@@ -213,7 +214,7 @@ export default function HeroMeshViz() {
     function tick() {
       raf = requestAnimationFrame(tick)
       const now = performance.now() - start
-      const W = canvas.width, H = canvas.height
+      const W = c.width, H = c.height
       ctx.clearRect(0, 0, W, H)
 
       const hx = W * 0.50, hy = H * 0.50
