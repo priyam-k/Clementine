@@ -41,7 +41,26 @@ export interface Job {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  estimatedCarbonSavedGrams?: number;
   subtasks: SubTask[];
+  artifacts?: Array<{
+    id: string;
+    artifactType: "markdown";
+    title: string;
+    filename: string;
+    content: string;
+    createdAt: number;
+    filePath?: string;
+  }>;
+  workerContributions?: Array<{
+    workerId: string;
+    workerName: string;
+    tasksCompleted: number;
+    totalDurationMs: number;
+    opsCount: number;
+    pixelsRendered: number;
+    carbonSavedGrams: number;
+  }>;
   result?: JobResult;
 }
 
@@ -51,6 +70,7 @@ export interface JobResult {
   durationMs: number;
   workerCount: number;
   dataProcessed: string;
+  estimatedCarbonSavedGrams?: number;
 }
 
 export interface CommandEntry {

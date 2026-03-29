@@ -1,6 +1,7 @@
 "use client";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import type { Job } from "@/lib/types";
+import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
 interface ProgressSummaryCardProps {
   job: Job;
@@ -8,8 +9,8 @@ interface ProgressSummaryCardProps {
 
 export function ProgressSummaryCard({ job }: ProgressSummaryCardProps) {
   const runningSubtasks = job.subtasks.filter((t) => t.status === "running").length;
-  const completedSubtasks = job.subtasks.filter((t) => t.status === "completed").length;
-  const queuedSubtasks = job.subtasks.filter((t) => t.status === "queued" || t.status === "assigned").length;
+  const completedSubtasks = job.completedSubtasks;
+  const queuedSubtasks = Math.max(job.totalSubtasks - job.completedSubtasks - runningSubtasks - job.failedSubtasks, 0);
 
   return (
     <div className="bg-white border border-[#120B09]/5 shadow-sm rounded-sm p-6 hover:border-[#EF8354]/20 transition-all">
@@ -43,6 +44,15 @@ export function ProgressSummaryCard({ job }: ProgressSummaryCardProps) {
             </p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-4 bg-[#F5F1EE] rounded-sm px-4 py-3 flex items-center justify-between">
+        <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+          Net Carbon Saved
+        </p>
+        <p className="text-sm font-black text-green-700">
+          {formatCarbonSaved(job.estimatedCarbonSavedGrams ?? 0)}
+        </p>
       </div>
 
       {/* Subtask progress bars for running */}

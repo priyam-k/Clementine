@@ -22,6 +22,8 @@ export function decomposeJob(job: ServerJob): ServerTask[] {
       return decomposeBlenderRender(job);
     case "fractal-render":
       return decomposeFractalRender(job);
+    case "enterprise-analysis":
+      return decomposeLlmAnalysis(job);
     default:
       return decomposeMockCompute(job);
   }
@@ -105,7 +107,12 @@ function decomposeFractalRender(job: ServerJob): ServerTask[] {
       createdTasks.push(task);
     });
 
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -118,6 +125,15 @@ export function detectJobType(command: string): JobType {
   }
   if (lower.includes("inference") || lower.includes("classify") || lower.includes("detect")) {
     return "batch-inference";
+  }
+  if (
+    lower.includes("vendor") ||
+    lower.includes("compliance") ||
+    lower.includes("enterprise") ||
+    lower.includes("risk") ||
+    lower.includes("selection")
+  ) {
+    return "enterprise-analysis";
   }
   if (
     lower.includes("analyze") ||
@@ -147,6 +163,7 @@ export function deriveTitle(command: string, jobType: JobType): string {
     "batch-inference": "Batch Inference",
     "blender-render": "Render Job",
     "fractal-render": "Fractal Render",
+    "enterprise-analysis": "Enterprise Analysis",
   };
 
   if (cleaned.length < 6) return typeLabels[jobType];
@@ -209,7 +226,12 @@ function decomposeMockCompute(job: ServerJob): ServerTask[] {
     createdTasks.push(task);
   }
 
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -244,7 +266,12 @@ function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -279,7 +306,12 @@ function decomposeBatchInference(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -314,6 +346,11 @@ function decomposeBlenderRender(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }

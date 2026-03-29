@@ -9,11 +9,19 @@ import type {
   FractalJobConfig,
   WorkerTelemetry,
   WorkerBenchmark,
+  WorkerContribution,
+  WireArtifact,
+  EnterpriseBenchmarkConfig,
+  VendorProfile,
 } from "../lib/shared-types";
 
 export interface ServerWorker {
   id: string;
   socketId: string;
+  lat?: number;
+  lon?: number;
+  carbonIntensity?: number;
+  activeTasks?: number;
   name: string;
   device: string;
   type: WorkerType;
@@ -47,6 +55,8 @@ export interface ServerTask {
   assignedWorkerId?: string;
   completedByWorkerId?: string;
   completedByWorkerName?: string;
+  completedCarbonIntensity?: number;
+  estimatedCarbonSavedGrams?: number;
   inputPayload: Record<string, unknown>;
   outputPayload?: Record<string, unknown>;
   startedAt?: number;
@@ -65,9 +75,21 @@ export interface ServerJob {
   startedAt?: number;
   completedAt?: number;
   taskIds: string[];
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  totalOps: number;
+  totalDataProcessed: number;
+  totalCarbonSavedGrams: number;
+  workerIdsUsed: string[];
+  completionSamples: string[];
+  workerContributions: WorkerContribution[];
+  artifacts: WireArtifact[];
   result?: WireResult;
   sessionCode: string;
   fractalConfig?: FractalJobConfig;
+  benchmarkConfig?: EnterpriseBenchmarkConfig;
+  vendorProfiles?: VendorProfile[];
 }
 
 export interface ServerSession {
@@ -76,4 +98,5 @@ export interface ServerSession {
   hostName: string;
   joinUrl: string;
   startedAt: number;
+  schedulerBias: number;
 }

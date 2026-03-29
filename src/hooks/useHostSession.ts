@@ -10,6 +10,7 @@ import type {
   WireTask,
   FractalTileInput,
   FractalTileResultPayload,
+  EnterpriseBenchmarkConfig,
 } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
@@ -24,8 +25,14 @@ export interface HostSessionState {
   jobs: WireJob[];
   fractalTiles: FractalTileResultPayload[];
   latestResult: WireResult | null;
+  schedulerBias: number;
   submitJob: (command: string) => void;
   submitFractalJob: (config: FractalJobConfig) => void;
+  submitEnterpriseBenchmark: (
+    command: string,
+    benchmarkConfig: EnterpriseBenchmarkConfig
+  ) => void;
+  setSchedulerBias: (bias: number) => void;
   reconnect: () => void;
 }
 
@@ -43,6 +50,7 @@ export function useHostSession(): HostSessionState {
   const [jobs, setJobs] = useState<WireJob[]>([]);
   const [fractalTiles, setFractalTiles] = useState<FractalTileResultPayload[]>([]);
   const [latestResult, setLatestResult] = useState<WireResult | null>(null);
+  const [schedulerBias, setSchedulerBiasState] = useState(0.5);
 
   // Persist session code across reconnects
   const sessionCodeRef = useRef<string | undefined>(
@@ -70,7 +78,11 @@ export function useHostSession(): HostSessionState {
         });
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
-      } else if (task.jobType === "batch-inference" || task.jobType === "llm-analysis") {
+      } else if (
+        task.jobType === "batch-inference" ||
+        task.jobType === "llm-analysis" ||
+        task.jobType === "enterprise-analysis"
+      ) {
         socket.emit("task:progress", { taskId: task.id, progress: 15 });
         const output = await executeK2InferenceTask(task);
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
@@ -96,7 +108,11 @@ export function useHostSession(): HostSessionState {
           },
         });
       }
-    } catch {
+    } catch (err) {
+      socket.emit("task:failed", {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
       executingTaskRef.current = null;
     }
     executingTaskRef.current = null;
@@ -123,6 +139,7 @@ export function useHostSession(): HostSessionState {
         window.localStorage.setItem(HOST_SESSION_STORAGE_KEY, sess.code);
       }
       setSession(sess);
+      setSchedulerBiasState(sess.schedulerBias);
       setWorkers(ws);
       setJobs(js);
       setFractalTiles([]);
@@ -222,17 +239,62 @@ export function useHostSession(): HostSessionState {
 
   const submitJob = useCallback((command: string) => {
     if (!command.trim()) return;
-    getSocket().emit("job:submit", { command: command.trim() });
+    getSocket().emit("job:submit", {
+      command: command.trim(),
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
 
   const submitFractalJob = useCallback((config: FractalJobConfig) => {
-    getSocket().emit("fractal:submit", config);
+    getSocket().emit("fractal:submit", {
+      config,
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
+
+  const submitEnterpriseBenchmark = useCallback(
+    (command: string, benchmarkConfig: EnterpriseBenchmarkConfig) => {
+      if (!command.trim()) return;
+      getSocket().emit("job:submit", {
+        command: command.trim(),
+        sessionCode: sessionCodeRef.current,
+        benchmarkConfig,
+      });
+    },
+    []
+  );
 
   const reconnect = useCallback(() => {
     const socket = getSocket();
     if (!socket.connected) socket.connect();
   }, []);
 
-  return { isConnected, session, workers, jobs, fractalTiles, latestResult, submitJob, submitFractalJob, reconnect };
+  const setSchedulerBias = useCallback((bias: number) => {
+    const normalizedBias = Math.min(Math.max(bias, 0), 1);
+    setSchedulerBiasState(normalizedBias);
+    setSession((prev) => (prev ? { ...prev, schedulerBias: normalizedBias } : prev));
+
+    const currentSessionCode = sessionCodeRef.current;
+    if (!currentSessionCode) return;
+
+    getSocket().emit("scheduler:bias:set", {
+      sessionCode: currentSessionCode,
+      bias: normalizedBias,
+    });
+  }, []);
+
+  return {
+    isConnected,
+    session,
+    workers,
+    jobs,
+    fractalTiles,
+    latestResult,
+    schedulerBias,
+    submitJob,
+    submitFractalJob,
+    submitEnterpriseBenchmark,
+    setSchedulerBias,
+    reconnect,
+  };
 }

@@ -44,6 +44,7 @@ function JoinPageInner() {
     workerStatus,
     currentTask,
     tasksCompleted,
+    selfWorker,
     joinSession,
     leaveSession,
     sessionCode,
@@ -112,6 +113,15 @@ function JoinPageInner() {
   }, [currentTask]);
 
   const uptimeLabel = tasksCompleted > 0 ? `${tasksCompleted * 4}m` : "0m";
+  const emissionsRating = (() => {
+    const carbonIntensity = selfWorker?.carbonIntensity;
+    if (typeof carbonIntensity !== "number") return "Awaiting Grid Data";
+    if (carbonIntensity <= 100) return "Very Clean";
+    if (carbonIntensity <= 200) return "Clean";
+    if (carbonIntensity <= 350) return "Moderate";
+    if (carbonIntensity <= 500) return "High";
+    return "Very High";
+  })();
 
   return (
     <div className="min-h-screen bg-[#FCFAF8]">
@@ -213,6 +223,8 @@ function JoinPageInner() {
             sessionCode={sessionCode || codeFromUrl}
             connectionState={connectionState}
             workerStatus={workerStatus}
+            carbonIntensity={selfWorker?.carbonIntensity}
+            emissionsRating={emissionsRating}
           />
         )}
 
@@ -250,13 +262,19 @@ function JoinPageInner() {
                 Your Stats
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="flex flex-wrap gap-3">
               {[
                 { label: "Tasks", value: String(tasksCompleted) },
                 { label: "Uptime", value: uptimeLabel },
                 { label: "Status", value: workerStatus === "working" ? "Active" : "Ready" },
+                {
+                  label: "Emissions",
+                  value: typeof selfWorker?.carbonIntensity === "number"
+                    ? `${Math.round(selfWorker.carbonIntensity)} g`
+                    : "—",
+                },
               ].map(({ label, value }) => (
-                <div key={label} className="text-center py-3 bg-[#F5F1EE] rounded-sm">
+                <div key={label} className="flex-1 min-w-[120px] text-center py-3 bg-[#F5F1EE] rounded-sm">
                   <p className="text-xl font-black text-[#120B09] tracking-tighter">{value}</p>
                   <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif] mt-0.5">
                     {label}
