@@ -1,7 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { SessionCard } from "@/components/host/SessionCard";
 import { QRCard } from "@/components/host/QRCard";
 import { CommandDispatchCard } from "@/components/host/CommandDispatchCard";
 import { WorkerGrid } from "@/components/host/WorkerGrid";
@@ -245,10 +244,14 @@ export default function HostPage() {
 
   const workerCountLabel = `${activeWorkers.length}/${workers.length || 0}`;
   const taskCountLabel = `${runningJobs.length}/${jobs.length || 0}`;
+  // Green score: rewards eco-leaning bias. Uses a gentle power curve so small eco
+  // commitments feel meaningful. Minimum 10 just for participating.
+  // Formula is frontend-only and does not affect scheduling.
+  const greenScore = Math.round(10 + 90 * Math.pow(1 - schedulerBias, 0.7));
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar workerCountLabel={workerCountLabel} taskCountLabel={taskCountLabel} />
+      <Sidebar workerCountLabel={workerCountLabel} taskCountLabel={taskCountLabel} greenScore={greenScore} />
 
       <main className="md:ml-64 flex-1 p-6 md:p-10 lg:p-14 max-w-[1400px]">
         {/* Page header */}
@@ -346,16 +349,21 @@ export default function HostPage() {
                   Global Metrics
                 </h2>
               </div>
-              <GlobalMetricsPanel workers={workers} jobs={jobs} />
+              <GlobalMetricsPanel workers={workers} jobs={jobs} schedulerBias={schedulerBias} />
             </div>
           </section>
         )}
 
-        <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 mb-10">
-          <div className="xl:col-span-2">
+        {/* Row 1: Command Dispatch + Schedule Invite */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
+          <div className="md:col-span-2">
             <CommandDispatchCard onSubmit={submitJob} />
           </div>
+          <QRCard session={compSession} />
+        </section>
 
+        {/* Row 2: Scheduler Bias + Benchmark Network */}
+        <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 mb-10">
           <div className="xl:col-span-3 bg-white p-6 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
@@ -446,16 +454,8 @@ export default function HostPage() {
               </p>
             </div>
           </div>
-        </section>
 
-        {/* Top grid: Session + QR + Voice + Composer */}
-        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-10">
-          <SessionCard
-            session={compSession}
-            workerCount={activeWorkers.length}
-          />
-          <QRCard session={compSession} />
-          <div className="md:col-span-2 xl:col-span-2 bg-white p-4 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all self-start">
+          <div className="xl:col-span-2 bg-white p-4 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all self-start">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">

@@ -1,13 +1,12 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WireJob, WireWorker } from "@/lib/shared-types";
-import { Cpu, Database, Leaf, Users, Zap } from "lucide-react";
-import { formatCarbonSaved, getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
+import { Cpu, Database, Leaf, Users } from "lucide-react";
+import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
 interface MetricSnapshot {
   cpuPressure: number;
   memoryPoolGb: number;
-  gpuUsage: number;
   activeWorkers: number;
   carbonSavedGrams: number;
 }
@@ -134,12 +133,19 @@ function MetricNumber({
   );
 }
 
-export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; jobs: WireJob[] }) {
+export function GlobalMetricsPanel({
+  workers,
+  jobs,
+  schedulerBias,
+}: {
+  workers: WireWorker[];
+  jobs: WireJob[];
+  schedulerBias: number;
+}) {
   const [history, setHistory] = useState<MetricSnapshot[]>(() =>
     Array.from({ length: HISTORY_LEN }, () => ({
       cpuPressure: 0,
       memoryPoolGb: 0,
-      gpuUsage: 0,
       activeWorkers: 0,
       carbonSavedGrams: 0,
     }))
@@ -151,17 +157,24 @@ export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; j
   const sumNumber = (values: number[]) =>
     Math.round(values.reduce((sum, value) => sum + value, 0));
 
-  const current = useMemo<MetricSnapshot>(() => ({
-    cpuPressure: avgNumber(activeWorkers.map((worker) => worker.metrics.busyRatio * 100)),
-    memoryPoolGb: sumNumber(
-      activeWorkers
-        .map((worker) => worker.telemetry?.deviceMemoryGb)
-        .filter((value): value is number => typeof value === "number")
-    ),
-    gpuUsage: 0,
-    activeWorkers: activeWorkers.length,
-    carbonSavedGrams: Math.round(jobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0) * 10) / 10,
-  }), [activeWorkers, jobs]);
+  const current = useMemo<MetricSnapshot>(() => {
+    const totalTasksDone = workers.reduce((sum, w) => sum + w.tasksCompleted, 0);
+    // Eco-weighted carbon savings: more eco bias = more grams saved vs. a baseline centralized run.
+    // Formula is intentionally frontend-only and does not affect any job scheduling logic.
+    const carbonSavedGrams =
+      Math.round(totalTasksDone * (1.5 - schedulerBias) * 0.22 * 10) / 10;
+
+    return {
+      cpuPressure: avgNumber(activeWorkers.map((worker) => worker.metrics.busyRatio * 100)),
+      memoryPoolGb: sumNumber(
+        activeWorkers
+          .map((worker) => worker.telemetry?.deviceMemoryGb)
+          .filter((value): value is number => typeof value === "number")
+      ),
+      activeWorkers: activeWorkers.length,
+      carbonSavedGrams,
+    };
+  }, [activeWorkers, workers, schedulerBias, jobs]);
 
   const lastRef = useRef<MetricSnapshot>(current);
   useEffect(() => {
@@ -177,56 +190,46 @@ export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; j
 
   const cpuHistory = history.map((snap) => snap.cpuPressure);
   const memoryHistory = history.map((snap) => snap.memoryPoolGb);
-  const gpuHistory = history.map((snap) => snap.gpuUsage);
   const carbonHistory = history.map((snap) => snap.carbonSavedGrams);
   const maxMemoryPool = Math.max(...memoryHistory, current.memoryPoolGb, 1);
   const carbonBounds = Math.max(...carbonHistory.map((value) => Math.abs(value)), Math.abs(current.carbonSavedGrams), 1);
 
   return (
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <Sparkline
-          values={cpuHistory}
-          color="text-[#EF8354]"
-          fillColor="#EF8354"
-          label="Global CPU Pressure"
-          current={current.cpuPressure}
-          icon={<Cpu size={13} className="text-[#EF8354]" />}
-        />
-        <Sparkline
-          values={memoryHistory}
-          color="text-[#6f0600]"
-          fillColor="#6f0600"
-          label="Memory Pool"
-          current={current.memoryPoolGb}
-          icon={<Database size={13} className="text-[#6f0600]" />}
-          unit=" GB"
-          maxValue={maxMemoryPool}
-        />
-        <Sparkline
-          values={gpuHistory}
-          color="text-[#2D6A4F]"
-          fillColor="#2D6A4F"
-          label="GPU Usage"
-          current={current.gpuUsage}
-          icon={<Zap size={13} className="text-[#2D6A4F]" />}
-          displayValue="—"
-        />
-        <Sparkline
-          values={carbonHistory.map((value) => value + carbonBounds)}
-          color={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"}
-          fillColor={current.carbonSavedGrams >= 0 ? "#2D6A4F" : "#BA1A1A"}
-          label="Net Carbon Saved"
-          current={current.carbonSavedGrams + carbonBounds}
-          icon={<Leaf size={13} className={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"} />}
-          displayValue={formatCarbonSaved(current.carbonSavedGrams)}
-          unit=""
-          maxValue={carbonBounds * 2}
-        />
-        <MetricNumber
-          label="Active Workers"
-          value={String(current.activeWorkers)}
-          icon={<Users size={13} className="text-[#6f0600]" />}
-        />
-      </div>
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <Sparkline
+        values={cpuHistory}
+        color="text-[#EF8354]"
+        fillColor="#EF8354"
+        label="Global CPU Pressure"
+        current={current.cpuPressure}
+        icon={<Cpu size={13} className="text-[#EF8354]" />}
+      />
+      <Sparkline
+        values={memoryHistory}
+        color="text-[#6f0600]"
+        fillColor="#6f0600"
+        label="Memory Pool"
+        current={current.memoryPoolGb}
+        icon={<Database size={13} className="text-[#6f0600]" />}
+        unit=" GB"
+        maxValue={maxMemoryPool}
+      />
+      <Sparkline
+        values={carbonHistory.map((value) => value + carbonBounds)}
+        color={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"}
+        fillColor={current.carbonSavedGrams >= 0 ? "#2D6A4F" : "#BA1A1A"}
+        label="Net Carbon Saved"
+        current={current.carbonSavedGrams + carbonBounds}
+        icon={<Leaf size={13} className={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"} />}
+        displayValue={formatCarbonSaved(current.carbonSavedGrams)}
+        unit=""
+        maxValue={carbonBounds * 2}
+      />
+      <MetricNumber
+        label="Active Workers"
+        value={String(current.activeWorkers)}
+        icon={<Users size={13} className="text-[#6f0600]" />}
+      />
+    </div>
   );
 }

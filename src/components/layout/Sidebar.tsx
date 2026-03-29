@@ -1,14 +1,15 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, ListTodo, Users, QrCode } from "lucide-react";
+import { LayoutDashboard, ListTodo, Users, QrCode, Leaf } from "lucide-react";
 
 interface SidebarProps {
   workerCountLabel?: string;
   taskCountLabel?: string;
+  greenScore?: number;
 }
 
-export function Sidebar({ workerCountLabel, taskCountLabel }: SidebarProps) {
+export function Sidebar({ workerCountLabel, taskCountLabel, greenScore }: SidebarProps) {
   const pathname = usePathname();
   const navItems = [
     { path: "/host", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -67,6 +68,37 @@ export function Sidebar({ workerCountLabel, taskCountLabel }: SidebarProps) {
           );
         })}
       </nav>
+
+      {/* Green Score */}
+      {greenScore !== undefined && (
+        <div className="mb-2 rounded-sm border border-[#120B09]/5 bg-white px-4 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <Leaf size={11} className="text-green-700" />
+              <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                Green Score
+              </p>
+            </div>
+            <span
+              className="text-lg font-black tracking-tighter"
+              style={{
+                color: greenScore >= 70 ? "#2D6A4F" : greenScore >= 40 ? "#EF8354" : "#BA1A1A",
+              }}
+            >
+              {greenScore}
+            </span>
+          </div>
+          <div className="h-1 bg-[#EDE7E3] rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${greenScore}%`,
+                background: greenScore >= 70 ? "#2D6A4F" : greenScore >= 40 ? "#EF8354" : "#BA1A1A",
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Join CTA */}
       <Link
