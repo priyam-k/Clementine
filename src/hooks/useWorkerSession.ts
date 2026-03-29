@@ -4,6 +4,7 @@ import { connectSocket, disconnectSocket, getSocket } from "./useSocket";
 import type { WireTask, FractalTileInput } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
+import { executeK2InferenceTask } from "@/lib/inference-client";
 
 // ─── Mock compute executor ───────────────────────────────────────────────────
 // Simulates realistic work in the browser with progress steps
@@ -124,10 +125,18 @@ export function useWorkerSession(): WorkerSessionState {
       setWorkerStatus("working");
 
       // Choose executor by job type
-      const executor = task.jobType === "fractal-render"
-        ? executeFractalTileTask
-        : (t: WireTask, onProgress: (p: number) => void) =>
-            executeMockTask(t.id, t.inputPayload, onProgress);
+      const executor =
+        task.jobType === "fractal-render"
+          ? executeFractalTileTask
+          : task.jobType === "batch-inference" || task.jobType === "llm-analysis"
+          ? async (t: WireTask, onProgress: (p: number) => void) => {
+              onProgress(15);
+              const result = await executeK2InferenceTask(t);
+              onProgress(100);
+              return result;
+            }
+          : (t: WireTask, onProgress: (p: number) => void) =>
+              executeMockTask(t.id, t.inputPayload, onProgress);
 
       try {
         const output = await executor(

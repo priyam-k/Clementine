@@ -95,6 +95,8 @@ export interface WireTask {
   jobType: JobType;
   status: TaskStatus;
   assignedWorkerId?: string;
+  completedByWorkerId?: string;
+  completedByWorkerName?: string;
   inputPayload: Record<string, unknown>;
   outputPayload?: Record<string, unknown>;
   startedAt?: number;
