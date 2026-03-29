@@ -2,6 +2,8 @@
 
 .claude
 
+/results
+
 # dependencies
 /node_modules
 /.pnp
