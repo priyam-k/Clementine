@@ -51,6 +51,7 @@ import {
   generateVendorProfiles,
   synthesizeEnterpriseMarkdown,
 } from "./enterprise-benchmark";
+import { createJobResultArtifact } from "./results-writer";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -645,6 +646,15 @@ export function setupSocketHandlers(io: IO, port: number) {
             } catch (err) {
               console.warn(`[reducer] LLM synthesis failed for "${finalJob.title}":`, err);
             }
+
+            try {
+              const artifact = await createJobResultArtifact(finalJob, result);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+              result.metrics.artifactType = "markdown";
+            } catch (err) {
+              console.warn(`[results] Markdown artifact write failed for "${finalJob.title}":`, err);
+            }
           }
 
           const finishedJob = updateJob(updatedJob.id, { status: "completed", result, taskIds: [] })!;
@@ -674,6 +684,114 @@ export function setupSocketHandlers(io: IO, port: number) {
         }
 
         // Broadcast updated worker list
+        const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
+        if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
+      }
+    });
+
+    // ── Task failed ───────────────────────────────────────────────────────────
+    socket.on("task:failed", ({ taskId, error }) => {
+      const worker = getWorkerBySocket(socket.id);
+      if (!worker) return;
+
+      const now = Date.now();
+      const task = getTask(taskId);
+      if (!task) return;
+
+      const job = getJob(task.jobId);
+      if (!job) return;
+
+      const taskDurationMs = task.startedAt ? Math.max(now - task.startedAt, 0) : 0;
+
+      updateTask(taskId, { status: "failed", progress: 0 });
+      updateWorker(worker.id, {
+        status: "idle",
+        currentTaskId: undefined,
+        activeTasks: Math.max((worker.activeTasks ?? 1) - 1, 0),
+        totalBusyMs: worker.totalBusyMs + taskDurationMs,
+        lastHeartbeatAt: now,
+      });
+
+      console.warn(`[task] "${taskId}" failed on worker "${worker.name}": ${error ?? "unknown error"}`);
+
+      deleteTask(taskId);
+      const updatedJob = updateJob(job.id, {
+        taskIds: job.taskIds.filter((id) => id !== taskId),
+        failedTasks: job.failedTasks + 1,
+      })!;
+
+      const hostSocketId = getHostSocketForSession(worker.sessionCode);
+      const allDone = updatedJob.completedTasks + updatedJob.failedTasks >= updatedJob.totalTasks;
+
+      if (allDone) {
+        const completedJob = updateJob(updatedJob.id, {
+          status: "reducing",
+          completedAt: now,
+        })!;
+        persistJobAndWorkers(completedJob.id);
+        if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
+
+        (async () => {
+          await new Promise<void>((r) => setTimeout(r, 400));
+          const finalJob = getJob(updatedJob.id)!;
+          const finalTasks = getTasksForJob(updatedJob.id);
+          const result = reduceJobResults(finalJob, finalTasks);
+
+          if (finalJob.jobType === "enterprise-analysis") {
+            try {
+              const markdown = await synthesizeEnterpriseMarkdown(
+                finalJob,
+                finalJob.vendorProfiles ?? [],
+                finalJob.completionSamples
+              );
+              const artifact = await createEnterpriseMarkdownArtifact(finalJob, markdown);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              result.summary = buildEnterpriseResultSummary(markdown);
+              result.outputLines = markdown
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 12);
+              result.metrics.artifactType = "markdown";
+              result.metrics.vendorCount = finalJob.vendorProfiles?.length ?? 0;
+              result.metrics.analysisDepth =
+                finalJob.benchmarkConfig?.analysisDepth ?? "standard";
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+            } catch (err) {
+              console.warn(`[reducer] Enterprise synthesis failed after task failures:`, err);
+            }
+          } else if (finalJob.jobType !== "fractal-render") {
+            try {
+              const artifact = await createJobResultArtifact(finalJob, result);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+              result.metrics.artifactType = "markdown";
+            } catch (err) {
+              console.warn(`[results] Markdown artifact write failed after task failures:`, err);
+            }
+          }
+
+          const finishedJob = updateJob(updatedJob.id, {
+            status: "completed",
+            result,
+            taskIds: [],
+          })!;
+          persistJobAndWorkers(finishedJob.id);
+          console.log(`[reducer] Job "${updatedJob.title}" completed (with ${updatedJob.failedTasks} failed tasks)`);
+
+          if (hostSocketId) {
+            io.to(hostSocketId).emit("job:complete", {
+              job: toWireJob(finishedJob),
+              result,
+            });
+          }
+          const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
+          if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
+        })();
+      } else {
+        if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(updatedJob));
+        persistJobAndWorkers(updatedJob.id);
+        if (hostSocketId) runScheduler(io, worker.sessionCode, hostSocketId);
         const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
         if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
       }
@@ -760,18 +878,18 @@ function summarizeTaskOutput(task: ReturnType<typeof getTask> extends infer T ? 
   }
 
   if (typeof output.summary === "string") {
-    return `${role}${task.title}: ${output.summary}`;
+    return `${role}${sanitizeSummaryText(output.summary)}`;
   }
 
   if (typeof output.result === "string") {
-    return `${role}${task.title}: ${output.result}`;
+    return `${role}${task.title}: ${sanitizeSummaryText(output.result)}`;
   }
 
   if (typeof output.durationMs === "number") {
     return `${task.title}: completed in ${Math.round(output.durationMs)}ms`;
   }
 
-  return `${role}${task.title}: ${JSON.stringify(output)}`;
+  return `${role}${task.title}: ${sanitizeSummaryText(JSON.stringify(output))}`;
 }
 
 function normalizeBenchmarkConfig(
@@ -785,4 +903,15 @@ function normalizeBenchmarkConfig(
     vendorCount: Math.max(1, Math.round(config.vendorCount)),
     analysisDepth: config.analysisDepth,
   };
+}
+
+function sanitizeSummaryText(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<\/?think>/gi, "")
+    .replace(/\bThe user says\b[\s\S]*/i, "")
+    .replace(/\bWe need to\b[\s\S]*/i, "")
+    .replace(/\bLet's parse\b[\s\S]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }

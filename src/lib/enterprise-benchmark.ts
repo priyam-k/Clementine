@@ -2,12 +2,13 @@ import type { EnterpriseBenchmarkConfig } from "./shared-types";
 
 export function getEnterpriseBenchmarkConfig(difficulty: number): EnterpriseBenchmarkConfig {
   const normalizedDifficulty = Math.min(Math.max(Math.round(difficulty), 1), 100);
+  const vendorCount = Math.min(40, Math.max(1, Math.round(1 + ((normalizedDifficulty - 1) * 39) / 99)));
 
   if (normalizedDifficulty <= 25) {
     return {
       benchmarkType: "enterprise-vendor-risk-selection",
       difficulty: normalizedDifficulty,
-      vendorCount: 5,
+      vendorCount,
       analysisDepth: "light",
     };
   }
@@ -16,7 +17,7 @@ export function getEnterpriseBenchmarkConfig(difficulty: number): EnterpriseBenc
     return {
       benchmarkType: "enterprise-vendor-risk-selection",
       difficulty: normalizedDifficulty,
-      vendorCount: 10,
+      vendorCount,
       analysisDepth: "standard",
     };
   }
@@ -25,7 +26,7 @@ export function getEnterpriseBenchmarkConfig(difficulty: number): EnterpriseBenc
     return {
       benchmarkType: "enterprise-vendor-risk-selection",
       difficulty: normalizedDifficulty,
-      vendorCount: 20,
+      vendorCount,
       analysisDepth: "deep",
     };
   }
@@ -33,7 +34,7 @@ export function getEnterpriseBenchmarkConfig(difficulty: number): EnterpriseBenc
   return {
     benchmarkType: "enterprise-vendor-risk-selection",
     difficulty: normalizedDifficulty,
-    vendorCount: normalizedDifficulty >= 91 ? 40 : 30,
+    vendorCount,
     analysisDepth: "extreme",
   };
 }

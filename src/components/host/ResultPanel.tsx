@@ -8,9 +8,10 @@ import { MarkdownArtifactView } from "@/components/host/MarkdownArtifactView";
 
 interface ResultPanelProps {
   job: Job;
+  wide?: boolean;
 }
 
-export function ResultPanel({ job }: ResultPanelProps) {
+export function ResultPanel({ job, wide = false }: ResultPanelProps) {
   if (!job.result) return null;
   const { result } = job;
   const markdownArtifact = useMemo(
@@ -30,7 +31,7 @@ export function ResultPanel({ job }: ResultPanelProps) {
   };
 
   return (
-    <div className="bg-[#120B09] border border-[#EF8354]/20 rounded-sm p-6 hover:border-[#EF8354]/40 transition-all">
+    <div className={`bg-[#120B09] border border-[#EF8354]/20 rounded-sm p-6 hover:border-[#EF8354]/40 transition-all ${wide ? "w-full" : ""}`}>
       {/* Header */}
       <div className="flex items-start justify-between mb-5">
         <div>
@@ -56,7 +57,7 @@ export function ResultPanel({ job }: ResultPanelProps) {
       <p className="text-white/70 text-xs leading-relaxed mb-4 font-medium">{result.summary}</p>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className={`grid gap-3 mb-4 ${wide ? "grid-cols-1 md:grid-cols-3" : "grid-cols-3"}`}>
         {[
           { icon: Clock, label: "Duration", value: formatDuration(result.durationMs) },
           { icon: Users, label: "Workers", value: String(result.workerCount) },

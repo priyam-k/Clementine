@@ -2,6 +2,25 @@
 
 import type { WireTask } from "@/lib/shared-types";
 
+function sanitizeModelText(content: string): string {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<\/?think>/gi, "")
+    .trim();
+}
+
+function safeJsonParse<T>(text: string): T | null {
+  try {
+    const stripped = sanitizeModelText(text)
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    return JSON.parse(stripped) as T;
+  } catch {
+    return null;
+  }
+}
+
 function buildInferencePrompt(task: WireTask): string {
   if (task.jobType === "enterprise-analysis") {
     return [
@@ -10,7 +29,8 @@ function buildInferencePrompt(task: WireTask): string {
       `Assigned vendors: ${JSON.stringify(task.inputPayload.assignedVendors ?? [])}`,
       `Criteria: ${JSON.stringify(task.inputPayload.criteria ?? [])}`,
       `Instructions: ${String(task.inputPayload.instructions ?? "")}`,
-      'Return valid JSON with fields "summary", "vendorFindings", "rankedVendorIds", "recommendationScore", and "notableRisks".',
+      "Use only the provided vendor fields as evidence. Do not invent external facts, market data, citations, hidden reasoning, or placeholders.",
+      'Return valid JSON only with fields "summary", "vendorFindings", "rankedVendorIds", "recommendationScore", and "notableRisks".',
     ].join("\n\n");
   }
 
@@ -42,7 +62,13 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
           role: "system",
           content:
             task.jobType === "enterprise-analysis"
-              ? "You are Clementine's enterprise analyst worker. Execute the assigned role-based vendor analysis carefully and return only the requested JSON."
+              ? [
+                  "You are Clementine's enterprise analyst worker.",
+                  "Analyze only the supplied vendor profile data.",
+                  "Do not reveal chain-of-thought, do not include <think> tags, and do not restate the prompt or instructions.",
+                  "Do not fabricate external facts or real-world claims that are not present in the provided vendor fields.",
+                  "Return only compact valid JSON.",
+                ].join(" ")
               : "You are Clementine's inference worker. Execute the assigned task directly and return only the useful result.",
         },
         {
@@ -60,16 +86,39 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
   }
 
   const durationMs = Math.round(performance.now() - startedAt);
+  const sanitizedContent =
+    typeof data.content === "string" ? sanitizeModelText(data.content) : "";
+
+  if (task.jobType === "enterprise-analysis") {
+    const parsed = safeJsonParse<{
+      summary?: string;
+      vendorFindings?: unknown;
+      rankedVendorIds?: unknown;
+      recommendationScore?: number;
+      notableRisks?: unknown;
+    }>(sanitizedContent);
+
+    return {
+      success: true,
+      provider: "k2",
+      model: data.model,
+      result: parsed?.summary ?? sanitizedContent,
+      summary: parsed?.summary ?? sanitizedContent,
+      vendorFindings: parsed?.vendorFindings,
+      rankedVendorIds: Array.isArray(parsed?.rankedVendorIds) ? parsed?.rankedVendorIds : [],
+      recommendationScore:
+        typeof parsed?.recommendationScore === "number" ? parsed.recommendationScore : undefined,
+      notableRisks: Array.isArray(parsed?.notableRisks) ? parsed?.notableRisks : [],
+      durationMs,
+      raw: data.raw,
+    };
+  }
 
   return {
     success: true,
     provider: "k2",
     model: data.model,
-    result: data.content,
-    markdown:
-      task.jobType === "enterprise-analysis" && typeof data.content === "string"
-        ? data.content
-        : undefined,
+    result: sanitizedContent,
     durationMs,
     raw: data.raw,
   };

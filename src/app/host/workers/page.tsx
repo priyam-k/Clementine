@@ -184,7 +184,11 @@ function StatusBreakdown({ workers }: { workers: WireWorker[] }) {
 }
 
 export default function WorkersPage() {
-  const { workers, session, isConnected } = useHostSession();
+  const { workers, jobs, session, isConnected } = useHostSession();
+  const onlineCount = workers.filter((worker) => worker.status !== "offline").length;
+  const runningJobCount = jobs.filter(
+    (job) => job.status === "running" || job.status === "decomposing" || job.status === "reducing"
+  ).length;
 
   const online = workers.filter((worker) => worker.status !== "offline");
   const working = workers.filter((worker) => worker.status === "working");
@@ -213,7 +217,10 @@ export default function WorkersPage() {
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar
+        workerCountLabel={`${onlineCount}/${workers.length || 0}`}
+        taskCountLabel={`${runningJobCount}/${jobs.length || 0}`}
+      />
       <main className="md:ml-64 flex-1 p-6 md:p-10 lg:p-14">
         <header className="mb-10">
           <Link href="/host" className="inline-flex items-center gap-2 text-[#4A3935]/50 hover:text-[#EF8354] transition-colors mb-5 font-[Inter,sans-serif] text-[10px] font-black uppercase tracking-widest">

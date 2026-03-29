@@ -191,6 +191,10 @@ export function useWorkerSession(): WorkerSessionState {
         }, 2500);
       } catch (err) {
         console.error("[worker] task execution error:", err);
+        socket.emit("task:failed", {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
         executingRef.current = null;
         setWorkerStatus("idle");
         setCurrentTask(null);

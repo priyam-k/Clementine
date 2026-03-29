@@ -108,7 +108,11 @@ export function useHostSession(): HostSessionState {
           },
         });
       }
-    } catch {
+    } catch (err) {
+      socket.emit("task:failed", {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
       executingTaskRef.current = null;
     }
     executingTaskRef.current = null;

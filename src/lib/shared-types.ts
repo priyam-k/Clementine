@@ -236,6 +236,7 @@ export interface ClientToServerEvents {
     taskId: string;
     output: Record<string, unknown>;
   }) => void;
+  "task:failed": (data: { taskId: string; error?: string }) => void;
   "metrics:report": (data: {
     sentAt: number;
     telemetry?: Partial<WorkerTelemetry>;

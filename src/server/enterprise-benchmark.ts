@@ -60,74 +60,319 @@ const ROLE_LIBRARY = [
 
 const VENDOR_BASES = [
   {
-    prefix: "Aster",
+    name: "Microsoft",
     sector: "cloud security orchestration",
-    strengths: ["strong incident response automation", "solid enterprise references"],
-    weaknesses: ["premium pricing", "slower procurement cycles"],
-    notes: "Good fit for regulated buyers that value stability over speed.",
+    strengths: ["broad enterprise footprint", "deep platform ecosystem"],
+    weaknesses: ["premium commercial terms", "complex licensing structure"],
+    notes: "Large incumbent benchmark profile for regulated enterprise deployments.",
   },
   {
-    prefix: "Brassline",
+    name: "Amazon Web Services",
     sector: "logistics visibility",
-    strengths: ["fast deployment", "strong analytics dashboards"],
-    weaknesses: ["limited multinational support", "younger services team"],
-    notes: "Often wins on speed but requires tighter governance support.",
+    strengths: ["high service breadth", "strong global infrastructure reach"],
+    weaknesses: ["cost sprawl risk", "governance complexity"],
+    notes: "Large-scale cloud benchmark profile with strong operating leverage.",
   },
   {
-    prefix: "CinderPeak",
+    name: "Google Cloud",
     sector: "workflow automation",
-    strengths: ["excellent API coverage", "high configurability"],
-    weaknesses: ["complex onboarding", "requires technical admins"],
-    notes: "Powerful platform with a steeper enablement curve.",
+    strengths: ["strong data platform reputation", "modern developer tooling"],
+    weaknesses: ["enterprise standardization gaps", "premium advanced services"],
+    notes: "Benchmark profile oriented around analytics-forward deployments.",
   },
   {
-    prefix: "Driftwater",
+    name: "Oracle",
     sector: "identity and access tooling",
-    strengths: ["mature controls library", "predictable release quality"],
-    weaknesses: ["higher annual commitments", "less flexible packaging"],
-    notes: "Enterprise-ready option with heavier commercial terms.",
+    strengths: ["deep enterprise account coverage", "mature controls posture"],
+    weaknesses: ["heavier contracting motion", "higher implementation friction"],
+    notes: "Benchmark profile for legacy-heavy enterprise environments.",
   },
   {
-    prefix: "Evergrid",
+    name: "SAP",
     sector: "data integration",
-    strengths: ["low-code connectors", "strong ecosystem partnerships"],
-    weaknesses: ["inconsistent documentation", "mixed migration tooling"],
-    notes: "Accessible for broad teams but documentation quality varies.",
+    strengths: ["strong global enterprise presence", "broad operational footprint"],
+    weaknesses: ["complex rollout programs", "higher services dependency"],
+    notes: "Benchmark profile for operations-heavy enterprise transformation.",
   },
   {
-    prefix: "Forgepath",
+    name: "Salesforce",
     sector: "supply chain risk intelligence",
-    strengths: ["rich benchmarking dataset", "rapid scenario modeling"],
-    weaknesses: ["limited federal experience", "pricing grows quickly with volume"],
-    notes: "Useful for strategy teams that need fast comparative modeling.",
+    strengths: ["large partner ecosystem", "strong workflow extensibility"],
+    weaknesses: ["cost growth at scale", "administrative overhead"],
+    notes: "Benchmark profile for ecosystem-driven enterprise rollouts.",
   },
   {
-    prefix: "Granite Arc",
+    name: "ServiceNow",
     sector: "IT operations analytics",
-    strengths: ["reliable alerting", "strong support reputation"],
-    weaknesses: ["aging UI", "moderate implementation effort"],
-    notes: "Dependable option that trades polish for maturity.",
+    strengths: ["strong workflow standardization", "good executive visibility"],
+    weaknesses: ["platform complexity", "premium enterprise pricing"],
+    notes: "Benchmark profile for service operations standardization.",
   },
   {
-    prefix: "Harborlight",
+    name: "Workday",
     sector: "vendor governance",
-    strengths: ["good policy templates", "clear executive reporting"],
-    weaknesses: ["limited customization depth", "slower roadmap cadence"],
-    notes: "Safe choice for governance-first teams.",
+    strengths: ["mature enterprise delivery model", "predictable product motion"],
+    weaknesses: ["less flexible customization", "heavier procurement process"],
+    notes: "Benchmark profile for process-centric enterprise buyers.",
   },
   {
-    prefix: "Ionfield",
+    name: "Okta",
     sector: "customer operations platform",
-    strengths: ["high throughput processing", "strong automation recipes"],
-    weaknesses: ["few large-enterprise case studies", "small compliance team"],
-    notes: "Efficient and modern, but references are still maturing.",
+    strengths: ["strong identity focus", "good ecosystem interoperability"],
+    weaknesses: ["concentration risk in core category", "security scrutiny sensitivity"],
+    notes: "Benchmark profile for identity-centric deployments.",
   },
   {
-    prefix: "Juniper North",
+    name: "Cloudflare",
     sector: "regulatory operations",
-    strengths: ["excellent audit workflows", "proven compliance expertise"],
-    weaknesses: ["higher services dependency", "slower innovation pace"],
-    notes: "Strong risk posture with heavier implementation support needs.",
+    strengths: ["strong edge network profile", "good performance narrative"],
+    weaknesses: ["portfolio breadth can complicate evaluation", "premium advanced packages"],
+    notes: "Benchmark profile for edge and network-performance scenarios.",
+  },
+  {
+    name: "CrowdStrike",
+    sector: "endpoint security",
+    strengths: ["strong security specialization", "clear platform positioning"],
+    weaknesses: ["category concentration risk", "premium pricing"],
+    notes: "Benchmark profile for security-focused buying decisions.",
+  },
+  {
+    name: "Palo Alto Networks",
+    sector: "network security",
+    strengths: ["broad security portfolio", "strong enterprise penetration"],
+    weaknesses: ["integration complexity", "higher commercial overhead"],
+    notes: "Benchmark profile for large-scale security consolidation.",
+  },
+  {
+    name: "Cisco",
+    sector: "enterprise networking",
+    strengths: ["strong installed base", "broad infrastructure footprint"],
+    weaknesses: ["legacy estate complexity", "slower procurement cycles"],
+    notes: "Benchmark profile for large networking and infrastructure programs.",
+  },
+  {
+    name: "IBM",
+    sector: "enterprise technology services",
+    strengths: ["deep enterprise relationships", "strong governance posture"],
+    weaknesses: ["heavier delivery model", "slower product velocity"],
+    notes: "Benchmark profile for governance-heavy enterprise transformation.",
+  },
+  {
+    name: "Snowflake",
+    sector: "data cloud platform",
+    strengths: ["strong analytics reputation", "clear data-platform focus"],
+    weaknesses: ["usage-cost variability", "platform standardization demands"],
+    notes: "Benchmark profile for data-intensive operating models.",
+  },
+  {
+    name: "Datadog",
+    sector: "observability platform",
+    strengths: ["modern tooling footprint", "strong developer affinity"],
+    weaknesses: ["cost expansion risk", "tool sprawl concerns"],
+    notes: "Benchmark profile for modern engineering organizations.",
+  },
+  {
+    name: "MongoDB",
+    sector: "developer data platform",
+    strengths: ["developer adoption", "flexible application support"],
+    weaknesses: ["governance tuning needs", "cost management complexity"],
+    notes: "Benchmark profile for application-centric platform decisions.",
+  },
+  {
+    name: "Atlassian",
+    sector: "team collaboration software",
+    strengths: ["strong team workflow usage", "good ecosystem extensions"],
+    weaknesses: ["administration sprawl", "enterprise control standardization gaps"],
+    notes: "Benchmark profile for collaboration-heavy knowledge teams.",
+  },
+  {
+    name: "Adobe",
+    sector: "digital experience software",
+    strengths: ["strong brand footprint", "broad product ecosystem"],
+    weaknesses: ["premium pricing", "portfolio complexity"],
+    notes: "Benchmark profile for customer-experience and content operations.",
+  },
+  {
+    name: "Zoom",
+    sector: "communications platform",
+    strengths: ["strong ease-of-use profile", "broad end-user familiarity"],
+    weaknesses: ["category competition pressure", "feature overlap risk"],
+    notes: "Benchmark profile for communications-centric deployments.",
+  },
+  {
+    name: "Twilio",
+    sector: "communications APIs",
+    strengths: ["developer-friendly platform", "broad messaging reach"],
+    weaknesses: ["usage-cost sensitivity", "reliance on communications volumes"],
+    notes: "Benchmark profile for API-led communications programs.",
+  },
+  {
+    name: "Shopify",
+    sector: "commerce platform",
+    strengths: ["clear product focus", "strong ecosystem momentum"],
+    weaknesses: ["category scope limits", "enterprise customization tradeoffs"],
+    notes: "Benchmark profile for commerce-led platform evaluations.",
+  },
+  {
+    name: "Stripe",
+    sector: "payments infrastructure",
+    strengths: ["strong developer reputation", "clean platform integration story"],
+    weaknesses: ["pricing sensitivity at scale", "regulatory workload in payments contexts"],
+    notes: "Benchmark profile for payments and monetization decisions.",
+  },
+  {
+    name: "Dell Technologies",
+    sector: "enterprise infrastructure",
+    strengths: ["broad enterprise infrastructure footprint", "strong channel presence"],
+    weaknesses: ["portfolio overlap", "heavier procurement cycles"],
+    notes: "Benchmark profile for infrastructure-heavy transformation plans.",
+  },
+  {
+    name: "HPE",
+    sector: "enterprise compute infrastructure",
+    strengths: ["strong infrastructure heritage", "good enterprise services attachment"],
+    weaknesses: ["complex portfolio positioning", "slower contracting motion"],
+    notes: "Benchmark profile for on-prem and hybrid infrastructure programs.",
+  },
+  {
+    name: "NVIDIA",
+    sector: "accelerated computing",
+    strengths: ["strong AI platform demand", "clear performance leadership perception"],
+    weaknesses: ["cost intensity", "supply sensitivity"],
+    notes: "Benchmark profile for AI-infrastructure focused procurement.",
+  },
+  {
+    name: "Intel",
+    sector: "enterprise compute hardware",
+    strengths: ["broad enterprise install base", "familiar platform standards"],
+    weaknesses: ["performance perception pressure", "execution scrutiny"],
+    notes: "Benchmark profile for mainstream enterprise compute decisions.",
+  },
+  {
+    name: "Akamai",
+    sector: "content delivery and security",
+    strengths: ["strong network heritage", "global delivery reach"],
+    weaknesses: ["portfolio complexity", "premium advanced services"],
+    notes: "Benchmark profile for network delivery and edge security tradeoffs.",
+  },
+  {
+    name: "VMware",
+    sector: "virtualization and cloud infrastructure",
+    strengths: ["deep enterprise footprint", "strong infrastructure standardization story"],
+    weaknesses: ["licensing sensitivity", "platform transition complexity"],
+    notes: "Benchmark profile for virtualization-centric estates.",
+  },
+  {
+    name: "Red Hat",
+    sector: "enterprise open source platform",
+    strengths: ["strong enterprise Linux credibility", "good platform consistency"],
+    weaknesses: ["skills dependency", "implementation expertise needs"],
+    notes: "Benchmark profile for open-source aligned enterprise platforms.",
+  },
+  {
+    name: "Splunk",
+    sector: "security and observability analytics",
+    strengths: ["strong analytics reputation", "broad operational visibility story"],
+    weaknesses: ["cost expansion at scale", "administrative tuning needs"],
+    notes: "Benchmark profile for operational analytics deployments.",
+  },
+  {
+    name: "Fortinet",
+    sector: "network security",
+    strengths: ["strong security appliance position", "broad mid-market reach"],
+    weaknesses: ["portfolio standardization effort", "integration tuning needs"],
+    notes: "Benchmark profile for network-security focused buyers.",
+  },
+  {
+    name: "Zscaler",
+    sector: "cloud security platform",
+    strengths: ["clear cloud-security positioning", "strong zero-trust narrative"],
+    weaknesses: ["architecture transition demands", "premium pricing"],
+    notes: "Benchmark profile for cloud-first security transformation.",
+  },
+  {
+    name: "HubSpot",
+    sector: "customer platform software",
+    strengths: ["strong ease-of-use reputation", "good go-to-market workflow alignment"],
+    weaknesses: ["enterprise depth questions", "platform sprawl risk"],
+    notes: "Benchmark profile for growth-oriented business operations.",
+  },
+  {
+    name: "Box",
+    sector: "content management",
+    strengths: ["strong document governance story", "enterprise-friendly collaboration stance"],
+    weaknesses: ["feature overlap pressure", "category competition"],
+    notes: "Benchmark profile for content-governance programs.",
+  },
+  {
+    name: "DocuSign",
+    sector: "digital agreements",
+    strengths: ["clear workflow focus", "strong user familiarity"],
+    weaknesses: ["category concentration", "cost scrutiny in broad rollouts"],
+    notes: "Benchmark profile for digital agreement workflows.",
+  },
+  {
+    name: "Slack",
+    sector: "enterprise collaboration",
+    strengths: ["strong user adoption", "broad workflow integrations"],
+    weaknesses: ["tool overlap risk", "governance standardization needs"],
+    notes: "Benchmark profile for collaboration and knowledge-work programs.",
+  },
+  {
+    name: "Asana",
+    sector: "work management software",
+    strengths: ["clear workflow organization", "good user-level adoption profile"],
+    weaknesses: ["enterprise control maturity questions", "platform overlap risk"],
+    notes: "Benchmark profile for work-management standardization.",
+  },
+  {
+    name: "UiPath",
+    sector: "automation software",
+    strengths: ["strong automation category focus", "good process-scale narrative"],
+    weaknesses: ["automation governance needs", "services dependence in complex rollouts"],
+    notes: "Benchmark profile for enterprise automation programs.",
+  },
+  {
+    name: "Samsara",
+    sector: "connected operations platform",
+    strengths: ["strong operations visibility positioning", "clear use-case alignment"],
+    weaknesses: ["vertical concentration", "expansion proof points needed"],
+    notes: "Benchmark profile for operational visibility deployments.",
+  },
+  {
+    name: "Oracle NetSuite",
+    sector: "business operations software",
+    strengths: ["strong ERP standardization story", "good mid-market enterprise fit"],
+    weaknesses: ["customization tradeoffs", "implementation effort"],
+    notes: "Benchmark profile for finance and operations standardization.",
+  },
+  {
+    name: "ZoomInfo",
+    sector: "go-to-market intelligence",
+    strengths: ["strong data-utility narrative", "good sales workflow alignment"],
+    weaknesses: ["data freshness scrutiny", "category competition pressure"],
+    notes: "Benchmark profile for revenue-operations workflows.",
+  },
+  {
+    name: "Confluent",
+    sector: "data streaming platform",
+    strengths: ["strong streaming specialization", "good platform extensibility"],
+    weaknesses: ["skills intensity", "operational complexity at scale"],
+    notes: "Benchmark profile for event-driven architecture programs.",
+  },
+  {
+    name: "Elastic",
+    sector: "search and observability platform",
+    strengths: ["broad use-case flexibility", "strong search reputation"],
+    weaknesses: ["tuning overhead", "portfolio sprawl risk"],
+    notes: "Benchmark profile for search and observability use cases.",
+  },
+  {
+    name: "SentinelOne",
+    sector: "endpoint security",
+    strengths: ["modern security platform perception", "strong automation narrative"],
+    weaknesses: ["category competition", "large-enterprise proof depth questions"],
+    notes: "Benchmark profile for endpoint security decisions.",
   },
 ];
 
@@ -163,11 +408,69 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
 
 function safeJsonParse<T>(text: string): T | null {
   try {
-    const stripped = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "").trim();
+    const stripped = sanitizeModelText(text)
+      .replace(/^```(?:json)?\s*/m, "")
+      .replace(/\s*```$/m, "")
+      .trim();
     return JSON.parse(stripped) as T;
   } catch {
     return null;
   }
+}
+
+const INTERNAL_MONOLOGUE_PATTERNS = [
+  /^\s*we need to\b/i,
+  /^\s*we must\b/i,
+  /^\s*let'?s\b/i,
+  /^\s*given the data\b/i,
+  /^\s*given we have\b/i,
+  /^\s*thus we\b/i,
+  /^\s*now (produce|write)\b/i,
+  /^\s*the user says\b/i,
+  /^\s*the user has provided\b/i,
+  /^\s*we have been given\b/i,
+  /^\s*we only have\b/i,
+  /^\s*but we must\b/i,
+  /^\s*however,? the\b/i,
+  /^\s*role assignment:\b/i,
+  /^\s*task description:\b/i,
+  /^\s*instructions:\b/i,
+  /^\s*return valid json\b/i,
+  /^\s*json schema\b/i,
+  /^\s*original prompt:?/i,
+];
+
+function stripInternalMonologueLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      return !INTERNAL_MONOLOGUE_PATTERNS.some((pattern) => pattern.test(trimmed));
+    })
+    .join("\n");
+}
+
+function extractMarkdownReport(text: string): string {
+  const headingMatch = text.match(/(^|\n)(#{1,6}\s.+)/);
+  if (!headingMatch || headingMatch.index === undefined) {
+    return text.trim();
+  }
+
+  const headingStart =
+    headingMatch[1] === "\n" ? headingMatch.index + 1 : headingMatch.index;
+  return text.slice(headingStart).trim();
+}
+
+function sanitizeModelText(text: string): string {
+  const sanitized = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<\/?think>/gi, "")
+    .replace(/^\s*The user has provided[\s\S]*?(?=#{1,6}\s|[\[{])/i, "")
+    .replace(/```(?:markdown|md)?/gi, "```")
+    .trim();
+
+  return stripInternalMonologueLines(extractMarkdownReport(sanitized)).trim();
 }
 
 async function callK2(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): Promise<string> {
@@ -225,7 +528,7 @@ export function generateVendorProfiles(config: EnterpriseBenchmarkConfig, seedSo
 
     return {
       id: `vendor_${String(index + 1).padStart(2, "0")}`,
-      name: `${base.prefix} ${index + 1}`,
+      name: base.name,
       size,
       strengths: [
         base.strengths[0],
@@ -287,7 +590,13 @@ export async function decomposeEnterpriseAnalysis(
       {
         role: "system",
         content:
-          "You are Clementine's enterprise workflow orchestrator. Create role-based parallel assignments for a distributed vendor evaluation benchmark. Respond only as valid JSON.",
+          [
+            "You are Clementine's enterprise workflow orchestrator.",
+            "Create role-based parallel assignments for a distributed vendor evaluation benchmark.",
+            "Use only the supplied vendor fields and evaluation criteria.",
+            "Do not invent external facts, browsing steps, or hidden reasoning.",
+            "Respond only as valid JSON.",
+          ].join(" "),
       },
       {
         role: "user",
@@ -368,11 +677,16 @@ function buildFallbackMarkdown(
   });
   const topTwo = ranked.slice(0, 2);
 
+  const executiveSummary =
+    topTwo.length >= 2
+      ? `Clementine evaluated ${vendors.length} vendors for ${job.title.toLowerCase()} and recommends **${topTwo.map((vendor) => vendor.name).join("** and **")}** as the top two options based on the provided vendor profile data.`
+      : `Clementine evaluated ${vendors.length} vendor for ${job.title.toLowerCase()} and recommends **${topTwo[0]?.name ?? "the available vendor"}** as the strongest option based on the provided vendor profile data. A second recommendation is not available because only one vendor was supplied.`;
+
   return [
     "# Clementine Vendor Evaluation Report",
     "",
     `## Executive Summary`,
-    `Clementine evaluated ${vendors.length} vendors for ${job.title.toLowerCase()} and recommends **${topTwo.map((vendor) => vendor.name).join("** and **")}** as the top two options based on reliability, scalability, cost efficiency, and compliance readiness.`,
+    executiveSummary,
     "",
     "## Evaluation Criteria",
     "- Risk",
@@ -388,7 +702,9 @@ function buildFallbackMarkdown(
     ...taskSummaries.map((summary) => `- ${summary}`),
     "",
     "## Recommendation",
-    `${topTwo[0]?.name ?? "Top vendor"} is the strongest overall choice for a production deployment, while ${topTwo[1]?.name ?? "the second-ranked vendor"} is the strongest alternative when balancing speed and governance.`,
+    topTwo.length >= 2
+      ? `${topTwo[0]?.name ?? "Top vendor"} is the strongest overall choice for a production deployment, while ${topTwo[1]?.name ?? "the second-ranked vendor"} is the strongest alternative when balancing speed and governance.`
+      : `${topTwo[0]?.name ?? "The available vendor"} is the strongest available choice for a production deployment based on the provided vendor profile. An additional vendor is required before naming a second recommendation.`,
     "",
     "## Risks / Tradeoffs",
     `- Higher-ranked vendors tend to cost more but reduce operational and compliance uncertainty.`,
@@ -411,7 +727,15 @@ export async function synthesizeEnterpriseMarkdown(
       {
         role: "system",
         content:
-          "You are Clementine's executive synthesis model. Produce a polished markdown report only. Use headings, ordered lists, unordered lists, emphasis, and concise business language.",
+          [
+            "You are Clementine's executive synthesis model.",
+            "Produce a polished markdown report only.",
+            "Use only the provided vendor profile data and analyst task summaries as evidence.",
+            "Do not mention prompts, parsing, instructions, JSON schemas, hidden reasoning, or <think> content.",
+            "Do not fabricate external facts, market claims, or compliance assertions that are not supported by the supplied data.",
+            "If only one vendor is available, say that no second recommendation is available rather than inventing one.",
+            "Use headings, ordered lists, unordered lists, emphasis, and concise business language.",
+          ].join(" "),
       },
       {
         role: "user",
@@ -446,7 +770,8 @@ export async function synthesizeEnterpriseMarkdown(
       },
     ]);
 
-    return markdown || fallback;
+    const sanitizedMarkdown = sanitizeMarkdownArtifact(markdown);
+    return sanitizedMarkdown || fallback;
   } catch {
     return fallback;
   }
@@ -461,8 +786,9 @@ function extractArtifactSummary(markdown: string): string {
 }
 
 export async function createEnterpriseMarkdownArtifact(job: ServerJob, markdown: string): Promise<WireArtifact> {
+  const sanitizedMarkdown = sanitizeMarkdownArtifact(markdown);
   const filenameBase = `${job.id}-vendor-evaluation`;
-  const filePath = await writeMarkdownArtifact(filenameBase, markdown);
+  const filePath = await writeMarkdownArtifact(filenameBase, sanitizedMarkdown);
 
   return {
     id: `artifact_${job.id}_markdown`,
@@ -470,7 +796,7 @@ export async function createEnterpriseMarkdownArtifact(job: ServerJob, markdown:
     artifactType: "markdown",
     title: `${job.title} Report`,
     filename: `${filenameBase}.md`,
-    content: markdown,
+    content: sanitizedMarkdown,
     createdAt: Date.now(),
     filePath,
   };
@@ -489,10 +815,43 @@ export function buildEnterpriseTaskPayload(
     criteria: task.criteria,
     assignedVendors,
     instructions:
-      `${task.description}\nReturn JSON with fields: summary, vendorFindings, rankedVendorIds, recommendationScore, notableRisks.`,
+      [
+        task.description,
+        "Use only the provided vendor profile fields as evidence.",
+        "Do not invent outside facts, citations, or market data.",
+        'Return compact JSON with fields: summary, vendorFindings, rankedVendorIds, recommendationScore, notableRisks.',
+      ].join(" "),
   };
 }
 
 export function buildEnterpriseResultSummary(markdown: string): string {
   return extractArtifactSummary(markdown);
+}
+
+export function sanitizeMarkdownArtifact(markdown: string): string {
+  const cleaned = sanitizeModelText(markdown);
+  if (!cleaned.startsWith("#")) {
+    return "";
+  }
+
+  const forbiddenFragments = [
+    "The user says",
+    "We need to",
+    "Let's parse",
+    "Return valid JSON",
+    "Role assignment:",
+    "Task description:",
+    "Instructions:",
+    "Original prompt:",
+  ];
+
+  if (forbiddenFragments.some((fragment) => cleaned.includes(fragment))) {
+    return stripInternalMonologueLines(cleaned)
+      .split("\n")
+      .filter((line) => !forbiddenFragments.some((fragment) => line.includes(fragment)))
+      .join("\n")
+      .trim();
+  }
+
+  return cleaned;
 }
