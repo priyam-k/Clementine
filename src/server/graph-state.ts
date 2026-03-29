@@ -1,56 +1,43 @@
-// ─── LangGraph State Schema ────────────────────────────────────────────────────
-// Single source of truth for data flowing between graph nodes.
-
 import { Annotation } from "@langchain/langgraph";
-import type { LLMDecomposition } from "./llm-decomposer";
 
-export interface GraphJobContext {
+export interface JobGraphContext {
+  jobId: string;
   sessionCode: string;
   hostSocketId: string;
-  jobId: string;
+}
+
+export interface JobGraphTaskSpec {
+  title: string;
+  description: string;
+  complexity?: number;
+  estimatedSeconds?: number;
+  dataLabel?: string;
+  role?: string;
+  vendorIds?: string[];
+  criteria?: string[];
+}
+
+export interface JobGraphDecomposition {
+  jobTitle: string;
+  resultSummaryHint: string;
+  tasks: JobGraphTaskSpec[];
 }
 
 export const JobGraphState = Annotation.Root({
-  // Immutable job context (set once at graph entry)
-  ctx: Annotation<GraphJobContext>({
-    reducer: (_, v) => v,
-    default: () => ({ sessionCode: "", hostSocketId: "", jobId: "" }),
-  }),
-
-  // Raw command string
-  command: Annotation<string>({
-    reducer: (_, v) => v,
-    default: () => "",
-  }),
-
-  // k2-think-v2 decomposition output (null if LLM unavailable)
-  decomposition: Annotation<LLMDecomposition | null>({
-    reducer: (_, v) => v,
-    default: () => null,
-  }),
-
-  // Task IDs created in the store after scheduling
+  command: Annotation<string>(),
+  ctx: Annotation<JobGraphContext>(),
+  decomposition: Annotation<JobGraphDecomposition | null>(),
   taskIds: Annotation<string[]>({
-    reducer: (_, v) => v,
+    reducer: (_, value) => value,
     default: () => [],
   }),
-
-  // Task completion results (merge-reducer so execute node can stream partial updates)
   taskResults: Annotation<Record<string, "completed" | "failed">>({
-    reducer: (prev, patch) => ({ ...prev, ...patch }),
+    reducer: (_, value) => value,
     default: () => ({}),
   }),
-
-  // Final k2-synthesized summary
   finalSummary: Annotation<string>({
-    reducer: (_, v) => v,
+    reducer: (_, value) => value,
     default: () => "",
-  }),
-
-  // Error propagation
-  error: Annotation<string | null>({
-    reducer: (_, v) => v,
-    default: () => null,
   }),
 });
 

@@ -1,13 +1,3 @@
-// ─── LangGraph Node Factories ─────────────────────────────────────────────────
-// Each factory returns an async node function that receives the current graph
-// state and returns a partial state update.
-//
-// Nodes:
-//   decompose — k2-think-v2 breaks the command into task specs
-//   schedule  — materialises task specs into the store and dispatches to workers
-//   execute   — suspends the graph until all Socket.IO tasks are done
-//   reduce    — aggregates results and synthesizes a final summary with k2
-
 import type { Server as IOServer } from "socket.io";
 import type { ServerToClientEvents, ClientToServerEvents } from "../lib/shared-types";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
@@ -17,25 +7,30 @@ import { decomposeJob } from "./decomposer";
 import { runScheduler } from "./scheduler";
 import { reduceJobResults } from "./reducer";
 import {
-  getJob,
-  updateJob,
+  appendJobArtifact,
   createTask,
+  getJob,
   getTasksForJob,
   getWorkersForSession,
   toWireJob,
   toWireWorker,
+  updateJob,
 } from "./store";
-import type { LLMDecomposition } from "./llm-decomposer";
-import type { JobGraphStateType } from "./graph-state";
+import { decomposeWithLLM, type LLMDecomposition, synthesizeResult } from "./llm-decomposer";
+import {
+  buildEnterpriseResultSummary,
+  buildEnterpriseTaskPayload,
+  createEnterpriseMarkdownArtifact,
+  decomposeEnterpriseAnalysis,
+  synthesizeEnterpriseMarkdown,
+} from "./enterprise-benchmark";
+import { createJobResultArtifact } from "./results-writer";
+import type { JobGraphDecomposition, JobGraphStateType } from "./graph-state";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 
-// ─── Async bridge: jobId → resolver ──────────────────────────────────────────
-// The execute node registers a Promise resolver here.
-// socket-handlers.ts calls the resolver when all tasks for a job are done.
 export const executionBridges = new Map<string, () => void>();
 
-// ─── Decompose system prompt (reuses logic from llm-decomposer.ts) ────────────
 const DECOMPOSE_SYSTEM_PROMPT = `You are the intelligent task orchestrator for Clementine, a distributed computing platform.
 
 When given a user's request, decompose it into 5–10 concrete parallel subtasks that can be
@@ -46,40 +41,39 @@ Think like a senior data engineer: identify the stages of the pipeline (fetch, p
 aggregate), estimate complexity, and break the work into independent chunks that can run in
 parallel.
 
-IMPORTANT: For tasks involving external data (YouTube, URLs, APIs), include realistic data
-in the task descriptions so workers can simulate meaningful processing. Generate plausible
-mock data summaries inline.
+Respond ONLY with valid JSON matching the requested schema.`;
 
-Respond ONLY with valid JSON matching this exact schema:
-{
-  "jobTitle": "short title under 60 chars",
-  "tasks": [
-    {
-      "title": "short task name",
-      "description": "detailed description of what this worker should do, including any mock data",
-      "complexity": 1-5,
-      "estimatedSeconds": 2-15,
-      "dataLabel": "optional data label shown in UI"
-    }
-  ],
-  "resultSummaryHint": "1-2 sentences describing what the final aggregate result should contain"
-}`;
-
-const SYNTHESIS_SYSTEM_PROMPT = `You are a data analyst synthesizing results from a distributed computation job.
-Given the original request and completed task outputs, produce a clear, quantitative report.
-Be specific: include numbers, percentages, key findings. Format with bullet points.
-Keep it under 300 words.`;
-
-// ─── Node: decompose ──────────────────────────────────────────────────────────
+function toGraphDecomposition(input: LLMDecomposition): JobGraphDecomposition {
+  return {
+    jobTitle: input.jobTitle,
+    resultSummaryHint: input.resultSummaryHint,
+    tasks: input.tasks.map((task) => ({
+      title: task.title,
+      description: task.description,
+      complexity: task.complexity,
+      estimatedSeconds: task.estimatedSeconds,
+      dataLabel: task.dataLabel,
+    })),
+  };
+}
 
 export function makeDecomposeNode(io: IO) {
   return async (state: JobGraphStateType): Promise<Partial<JobGraphStateType>> => {
     const { command, ctx } = state;
+    const job = getJob(ctx.jobId);
+    if (!job) return {};
 
     updateJob(ctx.jobId, { status: "decomposing" });
     io.to(ctx.hostSocketId).emit("job:update", toWireJob(getJob(ctx.jobId)!));
 
-    let decomposition: LLMDecomposition | null = null;
+    if (job.jobType === "enterprise-analysis" && job.benchmarkConfig && job.vendorProfiles) {
+      const decomposition = await decomposeEnterpriseAnalysis(
+        command,
+        job.vendorProfiles,
+        job.benchmarkConfig
+      );
+      return { decomposition };
+    }
 
     try {
       const model = getK2Model();
@@ -90,112 +84,113 @@ export function makeDecomposeNode(io: IO) {
       const parser = new JsonOutputParser<LLMDecomposition>();
       const chain = prompt.pipe(model).pipe(parser);
       const result = await chain.invoke({ command });
-
       if (result?.tasks?.length) {
-        decomposition = result;
-        console.log(`[graph:decompose] k2 produced ${decomposition.tasks.length} tasks: "${decomposition.jobTitle}"`);
+        return { decomposition: toGraphDecomposition(result) };
       }
-    } catch (err) {
-      console.warn("[graph:decompose] k2 failed, falling back to heuristics:", err);
+    } catch (error) {
+      console.warn("[graph:decompose] K2 parser path failed, falling back:", error);
     }
 
-    if (decomposition) {
-      updateJob(ctx.jobId, { title: decomposition.jobTitle });
-    }
-
-    return { decomposition };
+    const fallback = await decomposeWithLLM(command);
+    return { decomposition: fallback ? toGraphDecomposition(fallback) : null };
   };
 }
-
-// ─── Node: schedule ───────────────────────────────────────────────────────────
 
 export function makeScheduleNode(io: IO) {
   return async (state: JobGraphStateType): Promise<Partial<JobGraphStateType>> => {
     const { ctx, decomposition, command } = state;
-    const job = getJob(ctx.jobId)!;
+    const job = getJob(ctx.jobId);
+    if (!job) return {};
 
     let taskIds: string[] = [];
 
-    if (decomposition) {
-      for (const spec of decomposition.tasks) {
-        const t = createTask({
-          jobId: ctx.jobId,
-          title: spec.title,
-          description: spec.description,
-          jobType: job.jobType,
-          status: "queued",
-          progress: 0,
-          inputPayload: {
-            batchSize: Math.floor(1000 + spec.complexity * 1500),
-            complexity: spec.complexity,
-            operationType: job.jobType,
-            dataLabel: spec.dataLabel ?? decomposition.jobTitle,
-            estimatedSeconds: spec.estimatedSeconds,
-            seed: Math.floor(Math.random() * 100000),
-          },
-        });
-        taskIds.push(t.id);
+    if (decomposition?.tasks?.length) {
+      if (job.jobType === "enterprise-analysis" && job.vendorProfiles && job.benchmarkConfig) {
+        const vendorProfiles = job.vendorProfiles;
+        const benchmarkConfig = job.benchmarkConfig;
+        taskIds = decomposition.tasks.map((task) =>
+          createTask({
+            jobId: ctx.jobId,
+            title: task.title,
+            description: task.description,
+            jobType: "enterprise-analysis",
+            status: "queued",
+            progress: 0,
+            inputPayload: buildEnterpriseTaskPayload(
+              {
+                title: task.title,
+                description: task.description,
+                role: task.role ?? "Analyst",
+                vendorIds: task.vendorIds ?? [],
+                criteria: task.criteria ?? [],
+              },
+              vendorProfiles,
+              benchmarkConfig
+            ),
+          }).id
+        );
+      } else {
+        taskIds = decomposition.tasks.map((task) =>
+          createTask({
+            jobId: ctx.jobId,
+            title: task.title,
+            description: task.description,
+            jobType: job.jobType,
+            status: "queued",
+            progress: 0,
+            inputPayload: {
+              batchSize: Math.floor(1000 + (task.complexity ?? 2) * 1500),
+              complexity: task.complexity ?? 2,
+              operationType: job.jobType,
+              dataLabel: task.dataLabel ?? decomposition.jobTitle,
+              estimatedSeconds: task.estimatedSeconds,
+              seed: Math.floor(Math.random() * 100000),
+            },
+          }).id
+        );
       }
+
       updateJob(ctx.jobId, {
+        title: decomposition.jobTitle,
         taskIds,
         totalTasks: taskIds.length,
         completedTasks: 0,
         failedTasks: 0,
         normalizedCommand: JSON.stringify({
-          hint: decomposition.resultSummaryHint,
           original: command,
+          resultSummaryHint: decomposition.resultSummaryHint,
         }),
       });
     } else {
-      // Heuristic fallback
-      const tasks = decomposeJob(getJob(ctx.jobId)!);
-      taskIds = tasks.map(t => t.id);
-      console.log(`[graph:schedule] heuristic produced ${taskIds.length} tasks`);
+      const tasks = decomposeJob(job);
+      taskIds = tasks.map((task) => task.id);
     }
 
     updateJob(ctx.jobId, { status: "running", startedAt: Date.now() });
     io.to(ctx.hostSocketId).emit("job:update", toWireJob(getJob(ctx.jobId)!));
-
     runScheduler(io, ctx.sessionCode, ctx.hostSocketId);
-    console.log(`[graph:schedule] scheduled ${taskIds.length} tasks for job ${ctx.jobId}`);
 
     return { taskIds };
   };
 }
 
-// ─── Node: execute ────────────────────────────────────────────────────────────
-// Suspends until all tasks complete (bridge resolved by socket-handlers).
-
 export function makeExecuteNode() {
   return async (state: JobGraphStateType): Promise<Partial<JobGraphStateType>> => {
     const { ctx, taskIds } = state;
-
     if (taskIds.length === 0) {
-      console.log(`[graph:execute] no tasks for job ${ctx.jobId}, skipping wait`);
       return { taskResults: {} };
     }
 
-    console.log(`[graph:execute] waiting for ${taskIds.length} tasks on job ${ctx.jobId}`);
-
-    // Timeout safety: 10 minutes max
-    const TIMEOUT_MS = 10 * 60 * 1000;
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        executionBridges.set(ctx.jobId, resolve);
-      }),
-      new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error(`Job ${ctx.jobId} execution timed out`)), TIMEOUT_MS)
-      ),
-    ]);
-
+    await new Promise<void>((resolve) => {
+      executionBridges.set(ctx.jobId, resolve);
+    });
     executionBridges.delete(ctx.jobId);
-    console.log(`[graph:execute] all tasks done for job ${ctx.jobId}`);
 
-    const allTasks = getTasksForJob(ctx.jobId);
+    const tasks = getTasksForJob(ctx.jobId);
     const taskResults: Record<string, "completed" | "failed"> = {};
-    for (const t of allTasks) {
-      if (t.status === "completed" || t.status === "failed") {
-        taskResults[t.id] = t.status;
+    for (const task of tasks) {
+      if (task.status === "completed" || task.status === "failed") {
+        taskResults[task.id] = task.status;
       }
     }
 
@@ -203,60 +198,89 @@ export function makeExecuteNode() {
   };
 }
 
-// ─── Node: reduce ─────────────────────────────────────────────────────────────
-
 export function makeReduceNode(io: IO) {
   return async (state: JobGraphStateType): Promise<Partial<JobGraphStateType>> => {
-    const { ctx, decomposition, command } = state;
-    const job = getJob(ctx.jobId)!;
-    const tasks = getTasksForJob(ctx.jobId);
+    const { ctx } = state;
+    const job = getJob(ctx.jobId);
+    if (!job) return {};
 
-    // Heuristic aggregation
+    const tasks = getTasksForJob(ctx.jobId);
     const result = reduceJobResults(job, tasks);
 
-    // k2 synthesis for non-fractal jobs
-    let finalSummary = result.summary;
-    if (job.jobType !== "fractal-render") {
+    if (job.jobType === "enterprise-analysis") {
       try {
-        const model = getK2Model();
-        // Tasks may already be deleted from the store by the time reduce runs
-        // (socket-handlers deletes them one-by-one as they complete).
-        // Fall back to the original decomposition specs which are in graph state.
-        const taskSummaries = tasks.length > 0
-          ? tasks.filter(t => t.status === "completed").map(t => `${t.title}: ${t.description}`)
-          : (decomposition?.tasks ?? []).map(s => `${s.title}: ${s.description}`);
-        const hint = decomposition?.resultSummaryHint ?? "Distributed computation completed.";
+        const markdown = await synthesizeEnterpriseMarkdown(
+          job,
+          job.vendorProfiles ?? [],
+          job.completionSamples
+        );
+        const artifact = await createEnterpriseMarkdownArtifact(job, markdown);
+        const updatedWithArtifact = appendJobArtifact(job.id, artifact) ?? job;
+        result.summary = buildEnterpriseResultSummary(markdown);
+        result.outputLines = markdown
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .slice(0, 12);
+        result.metrics.artifactType = "markdown";
+        result.metrics.vendorCount = job.vendorProfiles?.length ?? 0;
+        job.artifacts = updatedWithArtifact.artifacts;
+      } catch (error) {
+        console.warn("[graph:reduce] enterprise synthesis failed:", error);
+      }
+    } else if (job.jobType !== "fractal-render") {
+      try {
+        const parsedMetadata = safeParseJobMetadata(job.normalizedCommand);
+        result.summary = await synthesizeResult(
+          job.title,
+          parsedMetadata.original ?? job.rawPrompt,
+          job.completionSamples,
+          parsedMetadata.resultSummaryHint ?? result.summary
+        );
+        result.outputLines = result.summary
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
 
-        const synthesisPrompt = ChatPromptTemplate.fromMessages([
-          ["system", SYNTHESIS_SYSTEM_PROMPT],
-          ["human", "Original request: \"{command}\"\n\nCompleted tasks:\n{taskList}\n\nHint: {hint}\n\nGenerate the final report:"],
-        ]);
-        const chain = synthesisPrompt.pipe(model);
-        const response = await chain.invoke({
-          command,
-          taskList: taskSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n"),
-          hint,
-        });
-        finalSummary = typeof response.content === "string"
-          ? response.content
-          : String(response.content);
-        console.log(`[graph:reduce] k2 synthesis complete for job ${ctx.jobId}`);
-      } catch (err) {
-        console.warn("[graph:reduce] k2 synthesis failed, using heuristic summary:", err);
+        const artifact = await createJobResultArtifact(job, result);
+        const updatedWithArtifact = appendJobArtifact(job.id, artifact) ?? job;
+        job.artifacts = updatedWithArtifact.artifacts;
+        result.metrics.artifactType = "markdown";
+      } catch (error) {
+        console.warn("[graph:reduce] generic synthesis failed:", error);
       }
     }
 
-    result.summary = finalSummary;
-    result.outputLines = finalSummary.split("\n").filter(l => l.trim());
+    const finishedJob = updateJob(ctx.jobId, {
+      status: "completed",
+      result,
+      taskIds: [],
+    })!;
 
-    const finishedJob = updateJob(ctx.jobId, { status: "completed", result })!;
-    console.log(`[graph:reduce] job "${job.title}" completed`);
+    io.to(ctx.hostSocketId).emit("job:complete", {
+      job: toWireJob(finishedJob),
+      result,
+    });
+    io.to(ctx.hostSocketId).emit(
+      "workers:update",
+      getWorkersForSession(ctx.sessionCode).map(toWireWorker)
+    );
 
-    io.to(ctx.hostSocketId).emit("job:complete", { job: toWireJob(finishedJob), result });
-
-    const workers = getWorkersForSession(ctx.sessionCode).map(toWireWorker);
-    io.to(ctx.hostSocketId).emit("workers:update", workers);
-
-    return { finalSummary };
+    return { finalSummary: result.summary };
   };
+}
+
+function safeParseJobMetadata(normalizedCommand: string): {
+  original?: string;
+  resultSummaryHint?: string;
+} {
+  try {
+    const parsed = JSON.parse(normalizedCommand) as {
+      original?: string;
+      resultSummaryHint?: string;
+    };
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
 }
