@@ -1,5 +1,5 @@
 import { MongoClient, type Db, type Collection } from "mongodb";
-import type { WireJob, WireTask } from "../lib/shared-types";
+import type { WireJob, WireWorker } from "../lib/shared-types";
 
 // ─── MongoDB Atlas client (singleton) ────────────────────────────────────────
 
@@ -84,27 +84,6 @@ export async function logJobEvent(event: {
   }
 }
 
-export async function logTaskResult(event: {
-  taskId: string;
-  jobId: string;
-  title: string;
-  jobType: string;
-  sessionCode: string;
-  workerId: string;
-  workerName: string;
-  status: string;
-  durationMs: number;
-  output?: Record<string, unknown>;
-}) {
-  try {
-    const col = await collection("task_results");
-    if (!col) return;
-    await col.insertOne({ ...event, timestamp: new Date() });
-  } catch (err) {
-    console.error("[mongo] logTaskResult error:", err);
-  }
-}
-
 export async function logSessionEvent(event: {
   type: "created" | "ended";
   sessionCode: string;
@@ -123,11 +102,26 @@ export async function persistJobSnapshot(job: WireJob & { sessionCode: string })
   try {
     const col = await collection("jobs");
     if (!col) return;
+    const lightweightJob = {
+      id: job.id,
+      title: job.title,
+      rawPrompt: job.rawPrompt,
+      jobType: job.jobType,
+      status: job.status,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      totalTasks: job.totalTasks,
+      completedTasks: job.completedTasks,
+      failedTasks: job.failedTasks,
+      result: job.result,
+      sessionCode: job.sessionCode,
+    };
     await col.updateOne(
       { id: job.id },
       {
         $set: {
-          ...job,
+          ...lightweightJob,
           updatedAt: new Date(),
         },
         $setOnInsert: {
@@ -141,18 +135,28 @@ export async function persistJobSnapshot(job: WireJob & { sessionCode: string })
   }
 }
 
-export async function persistTaskSnapshots(tasks: Array<WireTask & { sessionCode: string; jobType: string }>) {
+export async function persistWorkerSnapshots(workers: Array<WireWorker & { sessionCode: string }>) {
   try {
-    const col = await collection("tasks");
-    if (!col || tasks.length === 0) return;
+    const col = await collection("workers");
+    if (!col || workers.length === 0) return;
 
     await Promise.all(
-      tasks.map((task) =>
+      workers.map((worker) =>
         col.updateOne(
-          { id: task.id },
+          { id: worker.id, sessionCode: worker.sessionCode },
           {
             $set: {
-              ...task,
+              id: worker.id,
+              name: worker.name,
+              device: worker.device,
+              status: worker.status,
+              tasksCompleted: worker.tasksCompleted,
+              connectedAt: worker.connectedAt,
+              carbonIntensity: worker.carbonIntensity,
+              benchmark: worker.benchmark,
+              metrics: worker.metrics,
+              isHost: worker.isHost,
+              sessionCode: worker.sessionCode,
               updatedAt: new Date(),
             },
           },
@@ -161,7 +165,7 @@ export async function persistTaskSnapshots(tasks: Array<WireTask & { sessionCode
       )
     );
   } catch (err) {
-    console.error("[mongo] persistTaskSnapshots error:", err);
+    console.error("[mongo] persistWorkerSnapshots error:", err);
   }
 }
 
@@ -169,12 +173,11 @@ export async function exportSessionData(sessionCode: string) {
   const database = await getDb();
   if (!database) return null;
 
-  const [jobs, tasks, workerEvents, jobEvents, taskResults, sessionEvents] = await Promise.all([
+  const [jobs, workers, workerEvents, jobEvents, sessionEvents] = await Promise.all([
     database.collection("jobs").find({ sessionCode }).sort({ updatedAt: 1 }).toArray(),
-    database.collection("tasks").find({ sessionCode }).sort({ updatedAt: 1 }).toArray(),
+    database.collection("workers").find({ sessionCode }).sort({ updatedAt: 1 }).toArray(),
     database.collection("worker_events").find({ sessionCode }).sort({ timestamp: 1 }).toArray(),
     database.collection("job_events").find({ sessionCode }).sort({ timestamp: 1 }).toArray(),
-    database.collection("task_results").find({ sessionCode }).sort({ timestamp: 1 }).toArray(),
     database.collection("session_events").find({ sessionCode }).sort({ timestamp: 1 }).toArray(),
   ]);
 
@@ -182,10 +185,9 @@ export async function exportSessionData(sessionCode: string) {
     sessionCode,
     exportedAt: new Date().toISOString(),
     jobs,
-    tasks,
+    workers,
     workerEvents,
     jobEvents,
-    taskResults,
     sessionEvents,
   };
 }

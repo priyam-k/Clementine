@@ -64,8 +64,8 @@ export function FractalCanvas({ job, tiles }: FractalCanvasProps) {
     setTotalMs(Date.now() - (startTimeRef.current ?? Date.now()));
   }, [activeJobId, tiles]);
 
-  const totalTiles = job?.tasks.length ?? 0;
-  const completedTiles = job?.tasks.filter((t) => t.status === "completed").length ?? 0;
+  const totalTiles = job?.totalTasks ?? 0;
+  const completedTiles = job?.completedTasks ?? 0;
   const progress = totalTiles > 0 ? Math.round((completedTiles / totalTiles) * 100) : 0;
   const isComplete = job?.status === "completed" || job?.status === "reducing";
 

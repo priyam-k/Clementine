@@ -105,7 +105,12 @@ function decomposeFractalRender(job: ServerJob): ServerTask[] {
       createdTasks.push(task);
     });
 
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -209,7 +214,12 @@ function decomposeMockCompute(job: ServerJob): ServerTask[] {
     createdTasks.push(task);
   }
 
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -244,7 +254,12 @@ function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -279,7 +294,12 @@ function decomposeBatchInference(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
 
@@ -314,6 +334,11 @@ function decomposeBlenderRender(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
+  updateJob(job.id, {
+    taskIds: createdTasks.map((t) => t.id),
+    totalTasks: createdTasks.length,
+    completedTasks: 0,
+    failedTasks: 0,
+  });
   return createdTasks;
 }
