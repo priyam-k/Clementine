@@ -126,7 +126,11 @@ export function setupSocketHandlers(io: IO, port: number) {
       if (!session) {
         // Placeholder URL first so we can get the session code, then update it
         session = createSession(socket.id, socket.handshake.headers.host ?? "host", "");
-        session.joinUrl = `http://${localIP}:${port}/join?code=${session.code}`;
+        const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+        const baseUrl = publicDomain
+          ? `https://${publicDomain}`
+          : `http://${localIP}:${port}`;
+        session.joinUrl = `${baseUrl}/join?code=${session.code}`;
         console.log(`[host] New session created: ${session.code}`);
       } else {
         // Update host socket and fast lookup map on re-connect
