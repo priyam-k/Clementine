@@ -29,7 +29,8 @@ import {
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
 import { reduceJobResults } from "./reducer";
-import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
+import { runJobGraph } from "./job-graph";
+import { executionBridges } from "./graph-nodes";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
 import { logTaskResult, persistJobSnapshot, persistTaskSnapshots } from "./mongo";
@@ -212,6 +213,19 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Send initial job to host
       socket.emit("job:created", toWireJob(job));
 
+      // Hand off to LangGraph orchestration (decompose → schedule → execute → reduce)
+      (async () => {
+        try {
+          await runJobGraph(io, {
+            sessionCode: session.code,
+            hostSocketId: socket.id,
+            jobId: job.id,
+          }, command);
+        } catch (err) {
+          console.error(`[job-graph] job ${job.id} failed:`, err);
+          updateJob(job.id, { status: "failed" });
+          socket.emit("job:update", toWireJob(getJob(job.id)!));
+        }
       // Decompose — try LLM first, fall back to keyword heuristics
       updateJob(job.id, { status: "decomposing" });
       persistJobAndTasks(job.id);
@@ -433,32 +447,21 @@ export function setupSocketHandlers(io: IO, port: number) {
 
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
-        // Reduction — use LLM synthesis for text jobs, heuristic for others
+        // If this job is graph-managed, signal the execute node to resume.
+        // The graph's reduce node handles job:complete emission.
+        const bridgeResolve = executionBridges.get(job.id);
+        if (bridgeResolve) {
+          bridgeResolve();
+          // Graph handles the rest — do not run the legacy reducer below.
+          return;
+        }
+
+        // Legacy path: fractal jobs (not graph-managed)
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
           const finalJob = getJob(job.id)!;
           const finalTasks = getTasksForJob(job.id);
           const result = reduceJobResults(finalJob, finalTasks);
-
-          // For non-fractal jobs, enrich the summary with LLM synthesis
-          if (finalJob.jobType !== "fractal-render") {
-            try {
-              let hint = "Distributed computation completed.";
-              let originalCommand = finalJob.rawPrompt;
-              try {
-                const parsed = JSON.parse(finalJob.normalizedCommand ?? "{}");
-                if (parsed.hint) { hint = parsed.hint; originalCommand = parsed.original ?? originalCommand; }
-              } catch { /* not JSON, use raw command */ }
-
-              const taskSummaries = finalTasks
-                .filter(t => t.status === "completed")
-                .map(t => `${t.title}: ${t.description}`);
-
-              const llmSummary = await synthesizeResult(finalJob.title, originalCommand, taskSummaries, hint);
-              result.summary = llmSummary;
-              result.outputLines = llmSummary.split("\n").filter(l => l.trim());
-            } catch { /* keep heuristic result */ }
-          }
 
           const finishedJob = updateJob(job.id, { status: "completed", result })!;
           persistJobAndTasks(finishedJob.id);
