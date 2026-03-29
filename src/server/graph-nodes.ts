@@ -35,35 +35,43 @@ type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 // socket-handlers.ts calls the resolver when all tasks for a job are done.
 export const executionBridges = new Map<string, () => void>();
 
-// ─── Decompose system prompt (reuses logic from llm-decomposer.ts) ────────────
-const DECOMPOSE_SYSTEM_PROMPT = `You are the intelligent task orchestrator for Clementine, a distributed computing platform.
+// ─── Decompose system prompt ──────────────────────────────────────────────────
+const DECOMPOSE_SYSTEM_PROMPT = `You are the task orchestrator for Clementine, a distributed computing platform where browser workers run real JavaScript computations.
 
-When given a user's request, decompose it into 5–10 concrete parallel subtasks that can be
-distributed across browser-based worker nodes. Each worker is a CPU capable of running
-computation, data analysis, or inference tasks.
+Decompose the user request into 8-12 parallel subtasks. Use ONLY these task types:
 
-Think like a senior data engineer: identify the stages of the pipeline (fetch, process, analyze,
-aggregate), estimate complexity, and break the work into independent chunks that can run in
-parallel.
+TYPE 1: "prime-sieve"
+inputPayload: {"rangeStart": <integer>, "rangeEnd": <integer>}
+Purpose: count primes in a numeric range. Use for math, cryptography, enumeration.
+Example: {"rangeStart": 1000000, "rangeEnd": 3000000}
 
-IMPORTANT: For tasks involving external data (YouTube, URLs, APIs), include realistic data
-in the task descriptions so workers can simulate meaningful processing. Generate plausible
-mock data summaries inline.
+TYPE 2: "monte-carlo"
+inputPayload: {"iterations": <integer 500000-4000000>, "target": "pi"}
+Purpose: estimate pi via random sampling. Use for probability, simulation, estimation.
+Example: {"iterations": 2000000, "target": "pi"}
 
-Respond ONLY with valid JSON matching this exact schema:
-{
-  "jobTitle": "short title under 60 chars",
-  "tasks": [
-    {
-      "title": "short task name",
-      "description": "detailed description of what this worker should do, including any mock data",
-      "complexity": 1-5,
-      "estimatedSeconds": 2-15,
-      "dataLabel": "optional data label shown in UI"
-    }
-  ],
-  "resultSummaryHint": "1-2 sentences describing what the final aggregate result should contain"
-}`;
+TYPE 3: "sort-benchmark"
+inputPayload: {"size": <integer 200000-1500000>, "seed": <integer>}
+Purpose: sort N numbers and measure timing. Use for data ordering, benchmarking, performance.
+Example: {"size": 750000, "seed": 42}
+
+TYPE 4: "number-crunch"
+inputPayload: {"numbers": [<20-50 numbers>], "label": "<short string>"}
+Purpose: statistics + regression on a number array. Use for data science, finance, metrics.
+Example: {"numbers": [12.3, 45.6, 78.9, 23.1, 56.7], "label": "revenue shard 1"}
+
+STRICT RULES:
+- Output ONLY valid JSON. No markdown fences, no comments, no trailing commas.
+- All string values must be properly JSON-escaped (no raw newlines or unescaped quotes inside strings).
+- Use 8-12 tasks total, at least 2 different task types.
+- For prime-sieve: use non-overlapping ranges, each 1-4M wide.
+- For monte-carlo: vary iterations (500K, 1M, 2M, 3M, 4M) across tasks.
+- For sort-benchmark: vary size and seed across tasks.
+- For number-crunch: use 20-50 realistic numbers relevant to the domain; label must be under 40 chars with no special characters.
+- DO NOT use task type "mock-compute".
+
+OUTPUT FORMAT (valid JSON only):
+{"jobTitle":"<title under 60 chars>","tasks":[{"title":"<task name>","description":"<what it computes>","jobType":"<type>","inputPayload":{<payload>},"complexity":<1-5>,"estimatedSeconds":<2-12>}],"resultSummaryHint":"<what the final result will contain>"}`;
 
 const SYNTHESIS_SYSTEM_PROMPT = `You are a data analyst synthesizing results from a distributed computation job.
 Given the original request and completed task outputs, produce a clear, quantitative report.
@@ -118,21 +126,26 @@ export function makeScheduleNode(io: IO) {
 
     if (decomposition) {
       for (const spec of decomposition.tasks) {
+        // Use per-task jobType and inputPayload from LLM spec when available;
+        // fall back to legacy fake payload only if the LLM didn't provide them.
+        const taskJobType = (spec as { jobType?: string }).jobType ?? job.jobType;
+        const taskInputPayload = (spec as { inputPayload?: Record<string, unknown> }).inputPayload ?? {
+          batchSize: Math.floor(1000 + spec.complexity * 1500),
+          complexity: spec.complexity,
+          operationType: job.jobType,
+          dataLabel: spec.dataLabel ?? decomposition.jobTitle,
+          estimatedSeconds: spec.estimatedSeconds,
+          seed: Math.floor(Math.random() * 100000),
+        };
+
         const t = createTask({
           jobId: ctx.jobId,
           title: spec.title,
           description: spec.description,
-          jobType: job.jobType,
+          jobType: taskJobType as import("../lib/shared-types").JobType,
           status: "queued",
           progress: 0,
-          inputPayload: {
-            batchSize: Math.floor(1000 + spec.complexity * 1500),
-            complexity: spec.complexity,
-            operationType: job.jobType,
-            dataLabel: spec.dataLabel ?? decomposition.jobTitle,
-            estimatedSeconds: spec.estimatedSeconds,
-            seed: Math.floor(Math.random() * 100000),
-          },
+          inputPayload: taskInputPayload,
         });
         taskIds.push(t.id);
       }
@@ -153,7 +166,16 @@ export function makeScheduleNode(io: IO) {
       console.log(`[graph:schedule] heuristic produced ${taskIds.length} tasks`);
     }
 
-    updateJob(ctx.jobId, { status: "running", startedAt: Date.now() });
+    // Always set totalTasks regardless of which path ran — if this is 0 the
+    // allDone check in socket-handlers fires on the very first task:complete.
+    updateJob(ctx.jobId, {
+      status: "running",
+      startedAt: Date.now(),
+      taskIds,
+      totalTasks: taskIds.length,
+      completedTasks: 0,
+      failedTasks: 0,
+    });
     io.to(ctx.hostSocketId).emit("job:update", toWireJob(getJob(ctx.jobId)!));
 
     runScheduler(io, ctx.sessionCode, ctx.hostSocketId);
@@ -219,11 +241,16 @@ export function makeReduceNode(io: IO) {
     if (job.jobType !== "fractal-render") {
       try {
         const model = getK2Model();
-        // Tasks may already be deleted from the store by the time reduce runs
-        // (socket-handlers deletes them one-by-one as they complete).
-        // Fall back to the original decomposition specs which are in graph state.
+        // Build task summaries with real computed output when available.
+        // Tasks may already be released from the in-memory store by the time
+        // reduce runs — fall back to decomposition specs in that case.
         const taskSummaries = tasks.length > 0
-          ? tasks.filter(t => t.status === "completed").map(t => `${t.title}: ${t.description}`)
+          ? tasks.filter(t => t.status === "completed").map(t => {
+              const outStr = t.outputPayload && Object.keys(t.outputPayload).length > 0
+                ? ` | computed: ${JSON.stringify(t.outputPayload).slice(0, 400)}`
+                : "";
+              return `${t.title} [${t.jobType}]: ${t.description}${outStr}`;
+            })
           : (decomposition?.tasks ?? []).map(s => `${s.title}: ${s.description}`);
         const hint = decomposition?.resultSummaryHint ?? "Distributed computation completed.";
 

@@ -5,46 +5,41 @@ import type { WireTask, FractalTileInput, WireWorker } from "@/lib/shared-types"
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 import { executeK2InferenceTask } from "@/lib/inference-client";
+import {
+  executePrimeSieveTask,
+  executeTextAnalysisTask,
+  executeMonteCarloTask,
+  executeSortBenchmarkTask,
+  executeNumberCrunchTask,
+} from "@/lib/compute-executors";
 
-// ─── Mock compute executor ───────────────────────────────────────────────────
-// Simulates realistic work in the browser with progress steps
+// ─── Legacy mock compute executor ────────────────────────────────────────────
+// Kept as fallback for any task that doesn't match a known real type.
 
 function executeMockTask(
-  taskId: string,
   inputPayload: Record<string, unknown>,
   onProgress: (progress: number) => void
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
-    const complexity = typeof inputPayload.complexity === "number"
-      ? inputPayload.complexity
-      : 2;
-    const batchSize = typeof inputPayload.batchSize === "number"
-      ? (inputPayload.batchSize as number)
-      : 1000;
-
-    // Duration: 2–10s based on complexity
+    const complexity = typeof inputPayload.complexity === "number" ? inputPayload.complexity : 2;
+    const batchSize = typeof inputPayload.batchSize === "number" ? (inputPayload.batchSize as number) : 1000;
     const durationMs = 2000 + complexity * 1200 + Math.random() * 2000;
     const steps = 8 + Math.floor(Math.random() * 5);
     const intervalMs = durationMs / steps;
     let currentStep = 0;
     const startTime = Date.now();
-
     const interval = setInterval(() => {
       currentStep++;
-      const progress = Math.min(Math.round((currentStep / steps) * 100), 99);
-      onProgress(progress);
-
+      onProgress(Math.min(Math.round((currentStep / steps) * 100), 99));
       if (currentStep >= steps) {
         clearInterval(interval);
-        const actualDuration = Date.now() - startTime;
         const opsCount = Math.floor(batchSize * (0.5 + Math.random() * 1.5));
-        const efficiency = 0.72 + Math.random() * 0.23;
         resolve({
           success: true,
           result: `Processed ${opsCount.toLocaleString()} operations on ${batchSize.toLocaleString()} items`,
           opsCount,
-          durationMs: actualDuration,
-          efficiency,
+          durationMs: Date.now() - startTime,
+          efficiency: 0.72 + Math.random() * 0.23,
         });
       }
     }, intervalMs);
@@ -160,8 +155,23 @@ export function useWorkerSession(): WorkerSessionState {
               onProgress(100);
               return result;
             }
-          : (t: WireTask, onProgress: (p: number) => void) =>
-              executeMockTask(t.id, t.inputPayload, onProgress);
+          : task.jobType === "prime-sieve"
+          ? (_t: WireTask, onProgress: (p: number) => void) =>
+              executePrimeSieveTask(_t.inputPayload, onProgress)
+          : task.jobType === "text-analysis"
+          ? (_t: WireTask, onProgress: (p: number) => void) =>
+              executeTextAnalysisTask(_t.inputPayload, onProgress)
+          : task.jobType === "monte-carlo"
+          ? (_t: WireTask, onProgress: (p: number) => void) =>
+              executeMonteCarloTask(_t.inputPayload, onProgress)
+          : task.jobType === "sort-benchmark"
+          ? (_t: WireTask, onProgress: (p: number) => void) =>
+              executeSortBenchmarkTask(_t.inputPayload, onProgress)
+          : task.jobType === "number-crunch"
+          ? (_t: WireTask, onProgress: (p: number) => void) =>
+              executeNumberCrunchTask(_t.inputPayload, onProgress)
+          : (_t: WireTask, onProgress: (p: number) => void) =>
+              executeMockTask(_t.inputPayload, onProgress);
 
       try {
         const output = await executor(

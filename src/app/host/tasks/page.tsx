@@ -17,11 +17,16 @@ import { formatInputPayload, formatOutputPayload, formatDuration } from "@/app/h
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const JOB_TYPE_META: Record<JobType, { label: string; color: string; bg: string }> = {
-  "mock-compute": { label: "Compute", color: "text-[#EF8354]", bg: "bg-[#EF8354]" },
-  "llm-analysis": { label: "LLM", color: "text-purple-700", bg: "bg-purple-500" },
-  "batch-inference": { label: "Inference", color: "text-blue-700", bg: "bg-blue-500" },
-  "blender-render": { label: "Render", color: "text-green-700", bg: "bg-green-500" },
-  "fractal-render": { label: "Fractal", color: "text-[#6f0600]", bg: "bg-[#6f0600]" },
+  "mock-compute":   { label: "Compute",   color: "text-[#EF8354]",   bg: "bg-[#EF8354]"   },
+  "llm-analysis":  { label: "LLM",        color: "text-purple-700",  bg: "bg-purple-500"  },
+  "batch-inference":{ label: "Inference", color: "text-blue-700",    bg: "bg-blue-500"    },
+  "blender-render": { label: "Render",    color: "text-green-700",   bg: "bg-green-500"   },
+  "fractal-render": { label: "Fractal",   color: "text-[#6f0600]",   bg: "bg-[#6f0600]"  },
+  "prime-sieve":    { label: "Primes",    color: "text-amber-700",   bg: "bg-amber-500"   },
+  "text-analysis":  { label: "Text",      color: "text-sky-700",     bg: "bg-sky-500"     },
+  "monte-carlo":    { label: "Monte Carlo",color: "text-teal-700",   bg: "bg-teal-500"    },
+  "sort-benchmark": { label: "Sort",      color: "text-indigo-700",  bg: "bg-indigo-500"  },
+  "number-crunch":  { label: "Stats",     color: "text-rose-700",    bg: "bg-rose-500"    },
 };
 
 function jobProgress(job: WireJob): number {

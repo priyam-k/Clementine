@@ -77,6 +77,67 @@ export function formatInputPayload(
     return rows;
   }
 
+  if (jobType === "prime-sieve") {
+    return [
+      { label: "Range start", value: str(input.rangeStart) },
+      { label: "Range end", value: str(input.rangeEnd) },
+      {
+        label: "Range size",
+        value: typeof input.rangeEnd === "number" && typeof input.rangeStart === "number"
+          ? `${((input.rangeEnd - input.rangeStart) / 1_000_000).toFixed(2)}M numbers`
+          : "—",
+      },
+    ];
+  }
+
+  if (jobType === "text-analysis") {
+    const text = typeof input.text === "string" ? input.text : "";
+    return [
+      { label: "Label", value: str(input.label) },
+      { label: "Text length", value: `${text.length} chars` },
+      { label: "Top N", value: str(input.topN) },
+      { label: "Sample", value: text.slice(0, 80) + (text.length > 80 ? "…" : "") },
+    ];
+  }
+
+  if (jobType === "monte-carlo") {
+    return [
+      { label: "Target", value: str(input.target) },
+      {
+        label: "Iterations",
+        value: typeof input.iterations === "number"
+          ? `${(input.iterations / 1_000_000).toFixed(1)}M samples`
+          : "—",
+      },
+    ];
+  }
+
+  if (jobType === "sort-benchmark") {
+    return [
+      {
+        label: "Array size",
+        value: typeof input.size === "number"
+          ? `${(input.size / 1000).toFixed(0)}K elements`
+          : "—",
+      },
+      { label: "Seed", value: str(input.seed) },
+    ];
+  }
+
+  if (jobType === "number-crunch") {
+    const nums = Array.isArray(input.numbers) ? (input.numbers as number[]) : [];
+    return [
+      { label: "Label", value: str(input.label) },
+      { label: "Count", value: `${nums.length} values` },
+      { label: "Operation", value: str(input.operation) },
+      {
+        label: "Preview",
+        value: nums.slice(0, 6).map((n) => (typeof n === "number" ? n.toFixed(2) : n)).join(", ")
+          + (nums.length > 6 ? "…" : ""),
+      },
+    ];
+  }
+
   // Fallback
   return [{ label: "Raw", value: JSON.stringify(input, null, 2) }];
 }
@@ -101,6 +162,57 @@ export function formatOutputPayload(
     return [
       { label: "Render time", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
       { label: "Tile rendered", value: output.tileRendered ? "Yes" : "—" },
+    ];
+  }
+
+  if (jobType === "prime-sieve") {
+    return [
+      { label: "Prime count", value: output.primeCount != null ? (output.primeCount as number).toLocaleString() : "—" },
+      { label: "Largest prime", value: output.largestPrime != null ? (output.largestPrime as number).toLocaleString() : "—" },
+      { label: "Density", value: output.density != null ? String(output.density) : "—" },
+      { label: "Duration", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
+    ];
+  }
+
+  if (jobType === "text-analysis") {
+    return [
+      { label: "Total words", value: output.totalWords != null ? String(output.totalWords) : "—" },
+      { label: "Unique words", value: output.uniqueWords != null ? String(output.uniqueWords) : "—" },
+      { label: "Lex. diversity", value: output.lexicalDiversity != null ? String(output.lexicalDiversity) : "—" },
+      { label: "Avg word len", value: output.avgWordLength != null ? String(output.avgWordLength) : "—" },
+      { label: "Top words", value: typeof output.topWords === "string" ? output.topWords.slice(0, 100) : "—" },
+      { label: "Duration", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
+    ];
+  }
+
+  if (jobType === "monte-carlo") {
+    return [
+      { label: "π estimate", value: output.estimate != null ? String(output.estimate) : "—" },
+      { label: "Error", value: output.piError != null ? String(output.piError) : "—" },
+      { label: "Accuracy", value: output.accuracy != null ? `${output.accuracy}%` : "—" },
+      { label: "Iterations", value: output.iterations != null ? (output.iterations as number).toLocaleString() : "—" },
+      { label: "Duration", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
+    ];
+  }
+
+  if (jobType === "sort-benchmark") {
+    return [
+      { label: "Sort time", value: output.sortMs != null ? `${output.sortMs}ms` : "—" },
+      { label: "Throughput", value: output.itemsPerSecond != null ? `${(output.itemsPerSecond as number).toLocaleString()} items/s` : "—" },
+      { label: "Median", value: output.median != null ? String(output.median) : "—" },
+      { label: "P10–P90", value: output.p10 != null && output.p90 != null ? `${output.p10} – ${output.p90}` : "—" },
+      { label: "Duration", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
+    ];
+  }
+
+  if (jobType === "number-crunch") {
+    return [
+      { label: "Count", value: output.count != null ? String(output.count) : "—" },
+      { label: "Mean", value: output.mean != null ? String(output.mean) : "—" },
+      { label: "Std dev", value: output.stdDev != null ? String(output.stdDev) : "—" },
+      { label: "Trend", value: output.trend != null ? String(output.trend) : "—" },
+      { label: "R²", value: output.r2 != null ? String(output.r2) : "—" },
+      { label: "Duration", value: output.durationMs != null ? `${output.durationMs}ms` : "—" },
     ];
   }
 

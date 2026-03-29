@@ -11,7 +11,17 @@ export type JobStatus =
   | "reducing"
   | "completed"
   | "failed";
-export type JobType = "mock-compute" | "llm-analysis" | "batch-inference" | "blender-render" | "fractal-render";
+export type JobType =
+  | "mock-compute"
+  | "llm-analysis"
+  | "batch-inference"
+  | "blender-render"
+  | "fractal-render"
+  | "prime-sieve"
+  | "text-analysis"
+  | "monte-carlo"
+  | "sort-benchmark"
+  | "number-crunch";
 
 // ─── Wire shapes (sent over socket) ──────────────────────────────────────────
 

@@ -8,8 +8,10 @@ export interface LLMTaskSpec {
   title: string;
   description: string;
   complexity: number;       // 1-5
-  estimatedSeconds: number; // rough estimate for mock timing
+  estimatedSeconds: number; // rough estimate for timing
   dataLabel?: string;
+  jobType?: string;                          // one of the compute task types below
+  inputPayload?: Record<string, unknown>;    // real data payload matching jobType schema
 }
 
 export interface LLMDecomposition {
@@ -18,34 +20,37 @@ export interface LLMDecomposition {
   resultSummaryHint: string; // hint for the reducer to generate a good result
 }
 
-const SYSTEM_PROMPT = `You are the intelligent task orchestrator for Clementine, a distributed computing platform.
+const SYSTEM_PROMPT = `You are the task orchestrator for Clementine, a distributed computing platform where browser workers run real JavaScript computations.
 
-When given a user's request, decompose it into 5–10 concrete parallel subtasks that can be
-distributed across browser-based worker nodes. Each worker is a CPU capable of running
-computation, data analysis, or inference tasks.
+Decompose the user request into 8-12 parallel subtasks. Use ONLY these task types:
 
-Think like a senior data engineer: identify the stages of the pipeline (fetch, process, analyze,
-aggregate), estimate complexity, and break the work into independent chunks that can run in
-parallel.
+TYPE 1: "prime-sieve"
+inputPayload: {"rangeStart": <integer>, "rangeEnd": <integer>}
+Purpose: count primes in a numeric range. Use for math, cryptography, enumeration.
 
-IMPORTANT: For tasks involving external data (YouTube, URLs, APIs), include realistic data
-in the task descriptions so workers can simulate meaningful processing. Generate plausible
-mock data summaries inline.
+TYPE 2: "monte-carlo"
+inputPayload: {"iterations": <integer 500000-4000000>, "target": "pi"}
+Purpose: estimate pi via random sampling. Use for probability, simulation, estimation.
 
-Respond ONLY with valid JSON matching this exact schema:
-{
-  "jobTitle": "short title under 60 chars",
-  "tasks": [
-    {
-      "title": "short task name",
-      "description": "detailed description of what this worker should do, including any mock data",
-      "complexity": 1-5,
-      "estimatedSeconds": 2-15,
-      "dataLabel": "optional data label shown in UI"
-    }
-  ],
-  "resultSummaryHint": "1-2 sentences describing what the final aggregate result should contain"
-}`;
+TYPE 3: "sort-benchmark"
+inputPayload: {"size": <integer 200000-1500000>, "seed": <integer>}
+Purpose: sort N numbers and measure timing. Use for data ordering, benchmarking.
+
+TYPE 4: "number-crunch"
+inputPayload: {"numbers": [<20-50 numbers>], "label": "<short string under 40 chars>"}
+Purpose: statistics + regression on a number array. Use for data science, finance, metrics.
+
+RULES:
+- Output ONLY valid JSON. No markdown, no comments, no trailing commas.
+- 8-12 tasks total, at least 2 different task types.
+- prime-sieve: non-overlapping ranges each 1-4M wide.
+- monte-carlo: vary iterations across tasks (500K, 1M, 2M, 3M, 4M).
+- sort-benchmark: vary size and seed across tasks.
+- number-crunch: 20-50 realistic numbers; label must be plain ASCII under 40 chars.
+- DO NOT use "mock-compute".
+
+Respond with ONLY valid JSON matching this schema exactly:
+{"jobTitle":"<title>","tasks":[{"title":"<name>","description":"<purpose>","jobType":"<type>","inputPayload":{<payload>},"complexity":<1-5>,"estimatedSeconds":<2-12>}],"resultSummaryHint":"<what results contain>"}`;
 
 let client: Anthropic | null = null;
 

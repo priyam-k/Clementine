@@ -14,6 +14,13 @@ import type {
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 import { executeK2InferenceTask } from "@/lib/inference-client";
+import {
+  executePrimeSieveTask,
+  executeTextAnalysisTask,
+  executeMonteCarloTask,
+  executeSortBenchmarkTask,
+  executeNumberCrunchTask,
+} from "@/lib/compute-executors";
 
 // ─── Public state shape ───────────────────────────────────────────────────────
 
@@ -78,8 +85,23 @@ export function useHostSession(): HostSessionState {
         const output = await executeK2InferenceTask(task);
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output });
+      } else if (task.jobType === "prime-sieve") {
+        const output = await executePrimeSieveTask(task.inputPayload, (p) => socket.emit("task:progress", { taskId: task.id, progress: p }));
+        socket.emit("task:complete", { taskId: task.id, output });
+      } else if (task.jobType === "text-analysis") {
+        const output = await executeTextAnalysisTask(task.inputPayload, (p) => socket.emit("task:progress", { taskId: task.id, progress: p }));
+        socket.emit("task:complete", { taskId: task.id, output });
+      } else if (task.jobType === "monte-carlo") {
+        const output = await executeMonteCarloTask(task.inputPayload, (p) => socket.emit("task:progress", { taskId: task.id, progress: p }));
+        socket.emit("task:complete", { taskId: task.id, output });
+      } else if (task.jobType === "sort-benchmark") {
+        const output = await executeSortBenchmarkTask(task.inputPayload, (p) => socket.emit("task:progress", { taskId: task.id, progress: p }));
+        socket.emit("task:complete", { taskId: task.id, output });
+      } else if (task.jobType === "number-crunch") {
+        const output = await executeNumberCrunchTask(task.inputPayload, (p) => socket.emit("task:progress", { taskId: task.id, progress: p }));
+        socket.emit("task:complete", { taskId: task.id, output });
       } else {
-        // Mock compute for other job types
+        // Legacy fallback for mock-compute and unknown types
         const complexity = typeof task.inputPayload.complexity === "number" ? task.inputPayload.complexity : 2;
         const durationMs = 1500 + complexity * 800 + Math.random() * 1500;
         const steps = 6;

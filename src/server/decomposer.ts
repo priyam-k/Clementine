@@ -105,12 +105,7 @@ function decomposeFractalRender(job: ServerJob): ServerTask[] {
       createdTasks.push(task);
     });
 
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
+  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;
 }
 
@@ -147,11 +142,16 @@ export function deriveTitle(command: string, jobType: JobType): string {
     .trim();
 
   const typeLabels: Record<JobType, string> = {
-    "mock-compute": "Compute Job",
-    "llm-analysis": "LLM Analysis",
-    "batch-inference": "Batch Inference",
+    "mock-compute":   "Compute Job",
+    "llm-analysis":   "LLM Analysis",
+    "batch-inference":"Batch Inference",
     "blender-render": "Render Job",
     "fractal-render": "Fractal Render",
+    "prime-sieve":    "Prime Computation",
+    "text-analysis":  "Text Analysis",
+    "monte-carlo":    "Monte Carlo Simulation",
+    "sort-benchmark": "Sort Benchmark",
+    "number-crunch":  "Statistical Analysis",
   };
 
   if (cleaned.length < 6) return typeLabels[jobType];
@@ -161,65 +161,60 @@ export function deriveTitle(command: string, jobType: JobType): string {
   return title.length > 60 ? title.slice(0, 57) + "…" : title;
 }
 
-// ─── Mock Compute decomposition ───────────────────────────────────────────────
-
-const MOCK_TASK_TEMPLATES: Array<{
-  title: string;
-  description: string;
-  complexityRange: [number, number];
-}> = [
-  { title: "Data Ingestion & Sanitization", description: "Load and validate input dataset shards", complexityRange: [1, 2] },
-  { title: "Tokenization Pass", description: "Tokenize and normalize input vectors", complexityRange: [1, 2] },
-  { title: "Feature Extraction — Batch A", description: "Extract high-dimensional feature embeddings", complexityRange: [2, 4] },
-  { title: "Feature Extraction — Batch B", description: "Extract secondary feature embeddings", complexityRange: [2, 4] },
-  { title: "Parallel Processing Shard 1", description: "Process data shard 1 of N", complexityRange: [3, 5] },
-  { title: "Parallel Processing Shard 2", description: "Process data shard 2 of N", complexityRange: [3, 5] },
-  { title: "Parallel Processing Shard 3", description: "Process data shard 3 of N", complexityRange: [3, 5] },
-  { title: "Transformation Pipeline", description: "Apply transformation and normalization", complexityRange: [2, 3] },
-  { title: "Validation & Quality Check", description: "Verify output integrity and consistency", complexityRange: [1, 2] },
-  { title: "Result Aggregation", description: "Merge shard outputs into final artifact", complexityRange: [1, 2] },
-];
+// ─── Generic compute decomposition ────────────────────────────────────────────
+// Heuristic fallback used when LLM decompose fails. Generates real computation
+// tasks that browser workers can actually execute.
 
 function decomposeMockCompute(job: ServerJob): ServerTask[] {
-  const lower = job.rawPrompt.toLowerCase();
-
-  // Determine task count based on apparent complexity
-  const complexWords = ["distributed", "neural", "parallel", "large", "batch", "heavy", "all", "full", "complete"];
-  const complexityScore = complexWords.filter((w) => lower.includes(w)).length;
-  const taskCount = Math.min(Math.max(4, 4 + complexityScore), MOCK_TASK_TEMPLATES.length);
-
-  const selectedTemplates = MOCK_TASK_TEMPLATES.slice(0, taskCount);
   const createdTasks: ServerTask[] = [];
 
-  for (const template of selectedTemplates) {
-    const [minC, maxC] = template.complexityRange;
-    const complexity = minC + Math.random() * (maxC - minC);
-    const batchSize = Math.floor(1000 + Math.random() * 9000);
-
-    const task = createTask({
+  // 4 prime-sieve shards covering 1M–9M
+  const primeRanges: Array<[number, number]> = [
+    [1_000_000, 3_000_000],
+    [3_000_001, 5_000_000],
+    [5_000_001, 7_000_000],
+    [7_000_001, 9_000_000],
+  ];
+  for (const [start, end] of primeRanges) {
+    createdTasks.push(createTask({
       jobId: job.id,
-      title: template.title,
-      description: template.description,
-      jobType: "mock-compute",
+      title: `Prime Sieve ${(start / 1_000_000).toFixed(0)}M–${(end / 1_000_000).toFixed(0)}M`,
+      description: `Count all prime numbers in range ${start.toLocaleString()}–${end.toLocaleString()} via segmented sieve`,
+      jobType: "prime-sieve",
       status: "queued",
       progress: 0,
-      inputPayload: {
-        batchSize,
-        complexity,
-        operationType: "mock-compute",
-        dataLabel: job.title,
-        seed: Math.floor(Math.random() * 100000),
-      },
-    });
-    createdTasks.push(task);
+      inputPayload: { rangeStart: start, rangeEnd: end },
+    }));
   }
 
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
+  // 3 Monte Carlo estimations at different precision levels
+  for (const iterations of [500_000, 1_500_000, 3_000_000]) {
+    createdTasks.push(createTask({
+      jobId: job.id,
+      title: `Monte Carlo π (${(iterations / 1_000_000).toFixed(1)}M pts)`,
+      description: `Estimate π using ${iterations.toLocaleString()} random samples via Monte Carlo method`,
+      jobType: "monte-carlo",
+      status: "queued",
+      progress: 0,
+      inputPayload: { iterations, target: "pi" },
+    }));
+  }
+
+  // 3 sort benchmarks at different sizes
+  const sortConfigs: Array<[number, number]> = [[300_000, 42], [600_000, 9371], [1_000_000, 55123]];
+  for (const [size, seed] of sortConfigs) {
+    createdTasks.push(createTask({
+      jobId: job.id,
+      title: `Sort Benchmark ${(size / 1000).toFixed(0)}K`,
+      description: `Sort ${size.toLocaleString()} pseudo-random numbers and record timing + distribution statistics`,
+      jobType: "sort-benchmark",
+      status: "queued",
+      progress: 0,
+      inputPayload: { size, seed },
+    }));
+  }
+
+  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;
 }
 
@@ -254,12 +249,7 @@ function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
+  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;
 }
 
@@ -294,12 +284,7 @@ function decomposeBatchInference(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
+  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;
 }
 
@@ -334,11 +319,6 @@ function decomposeBlenderRender(job: ServerJob): ServerTask[] {
     });
     createdTasks.push(task);
   }
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
+  updateJob(job.id, { taskIds: createdTasks.map((t) => t.id) });
   return createdTasks;
 }
