@@ -5,38 +5,27 @@ import type { WireJob, WireTask } from "../lib/shared-types";
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
-let connecting: Promise<Db | null> | null = null;
 
 const DB_NAME = "clementine";
 
 async function getDb(): Promise<Db | null> {
   if (db) return db;
-  if (connecting) return connecting;
-
   const MONGODB_URI = process.env.MONGODB_URI ?? "";
   if (!MONGODB_URI) {
     console.warn("[mongo] MONGODB_URI not set — logging disabled");
     return null;
   }
 
-  connecting = (async () => {
-    try {
-      client = new MongoClient(MONGODB_URI);
-      await client.connect();
-      db = client.db(DB_NAME);
-      console.log("[mongo] Connected to MongoDB Atlas");
-      return db;
-    } catch (err) {
-      console.error("[mongo] Connection failed:", err);
-      await client?.close().catch(() => {});
-      client = null;
-      return null;
-    } finally {
-      connecting = null;
-    }
-  })();
-
-  return connecting;
+  try {
+    client = new MongoClient(MONGODB_URI);
+    await client.connect();
+    db = client.db(DB_NAME);
+    console.log("[mongo] Connected to MongoDB Atlas");
+    return db;
+  } catch (err) {
+    console.error("[mongo] Connection failed:", err);
+    return null;
+  }
 }
 
 async function collection(name: string): Promise<Collection | null> {
