@@ -20,6 +20,7 @@ const JOB_TYPE_META: Record<JobType, { label: string; color: string; bg: string 
   "batch-inference": { label: "Inference", color: "text-blue-700", bg: "bg-blue-500" },
   "blender-render": { label: "Render", color: "text-green-700", bg: "bg-green-500" },
   "fractal-render": { label: "Fractal", color: "text-[#6f0600]", bg: "bg-[#6f0600]" },
+  "enterprise-analysis": { label: "Enterprise", color: "text-sky-700", bg: "bg-sky-500" },
 };
 
 function jobProgress(job: WireJob): number {

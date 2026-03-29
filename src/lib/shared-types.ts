@@ -4,6 +4,7 @@ export type WorkerType = "browser" | "desktop" | "gpu" | "native";
 export type WorkerStatus = "idle" | "working" | "done" | "offline";
 export type TaskStatus = "queued" | "assigned" | "running" | "completed" | "failed";
 export type WorkerPerformanceTier = "fast" | "medium" | "slow";
+export type ArtifactType = "markdown";
 export type JobStatus =
   | "queued"
   | "decomposing"
@@ -11,7 +12,33 @@ export type JobStatus =
   | "reducing"
   | "completed"
   | "failed";
-export type JobType = "mock-compute" | "llm-analysis" | "batch-inference" | "blender-render" | "fractal-render";
+export type JobType =
+  | "mock-compute"
+  | "llm-analysis"
+  | "batch-inference"
+  | "blender-render"
+  | "fractal-render"
+  | "enterprise-analysis";
+export interface EnterpriseBenchmarkConfig {
+  benchmarkType: "enterprise-vendor-risk-selection";
+  difficulty: number;
+  vendorCount: number;
+  analysisDepth: "light" | "standard" | "deep" | "extreme";
+}
+
+export interface VendorProfile {
+  id: string;
+  name: string;
+  size: "startup" | "mid-market" | "enterprise";
+  strengths: string[];
+  weaknesses: string[];
+  costProfile: "low" | "medium" | "high";
+  complianceMaturity: "emerging" | "mature" | "advanced";
+  reliability: number;
+  scalability: number;
+  risk: number;
+  notes: string;
+}
 
 // ─── Wire shapes (sent over socket) ──────────────────────────────────────────
 
@@ -117,6 +144,17 @@ export interface WorkerContribution {
   carbonSavedGrams: number;
 }
 
+export interface WireArtifact {
+  id: string;
+  jobId: string;
+  artifactType: ArtifactType;
+  title: string;
+  filename: string;
+  content: string;
+  createdAt: number;
+  filePath?: string;
+}
+
 export interface WireJob {
   id: string;
   title: string;
@@ -131,6 +169,7 @@ export interface WireJob {
   completedTasks: number;
   failedTasks: number;
   workerContributions: WorkerContribution[];
+  artifacts: WireArtifact[];
   result?: WireResult;
 }
 
@@ -186,7 +225,11 @@ export interface ClientToServerEvents {
     telemetry?: WorkerTelemetry;
     benchmark?: WorkerBenchmark;
   }) => void;
-  "job:submit": (data: { command: string; sessionCode?: string }) => void;
+  "job:submit": (data: {
+    command: string;
+    sessionCode?: string;
+    benchmarkConfig?: EnterpriseBenchmarkConfig;
+  }) => void;
   "fractal:submit": (data: { config: FractalJobConfig; sessionCode?: string }) => void;
   "task:progress": (data: { taskId: string; progress: number }) => void;
   "task:complete": (data: {

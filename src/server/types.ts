@@ -10,6 +10,9 @@ import type {
   WorkerTelemetry,
   WorkerBenchmark,
   WorkerContribution,
+  WireArtifact,
+  EnterpriseBenchmarkConfig,
+  VendorProfile,
 } from "../lib/shared-types";
 
 export interface ServerWorker {
@@ -81,9 +84,12 @@ export interface ServerJob {
   workerIdsUsed: string[];
   completionSamples: string[];
   workerContributions: WorkerContribution[];
+  artifacts: WireArtifact[];
   result?: WireResult;
   sessionCode: string;
   fractalConfig?: FractalJobConfig;
+  benchmarkConfig?: EnterpriseBenchmarkConfig;
+  vendorProfiles?: VendorProfile[];
 }
 
 export interface ServerSession {

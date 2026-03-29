@@ -3,6 +3,17 @@
 import type { WireTask } from "@/lib/shared-types";
 
 function buildInferencePrompt(task: WireTask): string {
+  if (task.jobType === "enterprise-analysis") {
+    return [
+      `Role assignment: ${String(task.inputPayload.role ?? task.title)}`,
+      `Task description: ${task.description}`,
+      `Assigned vendors: ${JSON.stringify(task.inputPayload.assignedVendors ?? [])}`,
+      `Criteria: ${JSON.stringify(task.inputPayload.criteria ?? [])}`,
+      `Instructions: ${String(task.inputPayload.instructions ?? "")}`,
+      'Return valid JSON with fields "summary", "vendorFindings", "rankedVendorIds", "recommendationScore", and "notableRisks".',
+    ].join("\n\n");
+  }
+
   const payload = Object.entries(task.inputPayload)
     .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
     .join("\n");
@@ -29,7 +40,10 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
       messages: [
         {
           role: "system",
-          content: "You are Clementine's inference worker. Execute the assigned task directly and return only the useful result.",
+          content:
+            task.jobType === "enterprise-analysis"
+              ? "You are Clementine's enterprise analyst worker. Execute the assigned role-based vendor analysis carefully and return only the requested JSON."
+              : "You are Clementine's inference worker. Execute the assigned task directly and return only the useful result.",
         },
         {
           role: "user",
@@ -52,6 +66,10 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
     provider: "k2",
     model: data.model,
     result: data.content,
+    markdown:
+      task.jobType === "enterprise-analysis" && typeof data.content === "string"
+        ? data.content
+        : undefined,
     durationMs,
     raw: data.raw,
   };

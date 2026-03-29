@@ -5,6 +5,7 @@ import type {
   FractalJobConfig,
   FractalTileInput,
   FractalTileOutput,
+  EnterpriseBenchmarkConfig,
 } from "../lib/shared-types";
 import {
   createSession,
@@ -31,6 +32,7 @@ import {
   updateSessionHostSocket,
   updateSessionSchedulerBias,
   rebindWorkerSocket,
+  appendJobArtifact,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -41,6 +43,14 @@ import { persistJobSnapshot, persistWorkerSnapshots } from "./mongo";
 import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
 import { handleWorkerJoin, type Worker as SchedulerWorker } from "./taskScheduler";
 import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
+import {
+  buildEnterpriseResultSummary,
+  buildEnterpriseTaskPayload,
+  createEnterpriseMarkdownArtifact,
+  decomposeEnterpriseAnalysis,
+  generateVendorProfiles,
+  synthesizeEnterpriseMarkdown,
+} from "./enterprise-benchmark";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -248,7 +258,7 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Job submitted (text command) ──────────────────────────────────────────
-    socket.on("job:submit", ({ command, sessionCode }) => {
+    socket.on("job:submit", ({ command, sessionCode, benchmarkConfig }) => {
       const session =
         getSessionByHostSocket(socket.id)
         ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
@@ -257,8 +267,15 @@ export function setupSocketHandlers(io: IO, port: number) {
         return;
       }
 
-      const jobType = detectJobType(command);
-      const title = deriveTitle(command, jobType);
+      const resolvedBenchmarkConfig = normalizeBenchmarkConfig(benchmarkConfig);
+      const jobType = resolvedBenchmarkConfig ? "enterprise-analysis" : detectJobType(command);
+      const title = resolvedBenchmarkConfig
+        ? `Enterprise Vendor Risk & Selection — ${resolvedBenchmarkConfig.vendorCount} Vendors`
+        : deriveTitle(command, jobType);
+      const vendorProfiles =
+        resolvedBenchmarkConfig
+          ? generateVendorProfiles(resolvedBenchmarkConfig, `${session.code}:${command}`)
+          : undefined;
 
       const job = createJob({
         rawPrompt: command,
@@ -266,6 +283,8 @@ export function setupSocketHandlers(io: IO, port: number) {
         jobType,
         title,
         sessionCode: session.code,
+        benchmarkConfig: resolvedBenchmarkConfig,
+        vendorProfiles,
       });
 
       console.log(`[job] Created "${title}" (${jobType}) for session ${session.code}`);
@@ -280,12 +299,52 @@ export function setupSocketHandlers(io: IO, port: number) {
           persistJobAndWorkers(job.id);
           socket.emit("job:update", toWireJob(getJob(job.id)!));
 
-          const llmDecomposition = await decomposeWithLLM(command);
-
-          if (llmDecomposition?.tasks?.length) {
-            const taskIds = llmDecomposition.tasks.map((spec) =>
+          if (job.jobType === "enterprise-analysis" && resolvedBenchmarkConfig && vendorProfiles) {
+            const enterpriseDecomposition = await decomposeEnterpriseAnalysis(
+              command,
+              vendorProfiles,
+              resolvedBenchmarkConfig
+            );
+            const taskIds = enterpriseDecomposition.tasks.map((spec) =>
               createTask({
                 jobId: job.id,
+                title: spec.title,
+                description: spec.description,
+                jobType: "enterprise-analysis",
+                status: "queued",
+                progress: 0,
+                inputPayload: buildEnterpriseTaskPayload(
+                  spec,
+                  vendorProfiles,
+                  resolvedBenchmarkConfig
+                ),
+              }).id
+            );
+
+            updateJob(job.id, {
+              title: enterpriseDecomposition.jobTitle,
+              taskIds,
+              totalTasks: taskIds.length,
+              completedTasks: 0,
+              failedTasks: 0,
+              normalizedCommand: JSON.stringify({
+                mode: "enterprise-analysis",
+                original: command,
+                resultSummaryHint: enterpriseDecomposition.resultSummaryHint,
+                benchmarkConfig: resolvedBenchmarkConfig,
+              }),
+            });
+
+            console.log(
+              `[job] Enterprise decomposition created ${taskIds.length} tasks across ${vendorProfiles.length} vendors`
+            );
+          } else {
+            const llmDecomposition = await decomposeWithLLM(command);
+
+            if (llmDecomposition?.tasks?.length) {
+              const taskIds = llmDecomposition.tasks.map((spec) =>
+                createTask({
+                  jobId: job.id,
                 title: spec.title,
                 description: spec.description,
                 jobType: job.jobType,
@@ -302,24 +361,25 @@ export function setupSocketHandlers(io: IO, port: number) {
               }).id
             );
 
-            updateJob(job.id, {
-              title: llmDecomposition.jobTitle,
-              taskIds,
-              totalTasks: taskIds.length,
-              completedTasks: 0,
-              failedTasks: 0,
-              normalizedCommand: JSON.stringify({
-                original: command,
-                resultSummaryHint: llmDecomposition.resultSummaryHint,
-              }),
-            });
+              updateJob(job.id, {
+                title: llmDecomposition.jobTitle,
+                taskIds,
+                totalTasks: taskIds.length,
+                completedTasks: 0,
+                failedTasks: 0,
+                normalizedCommand: JSON.stringify({
+                  original: command,
+                  resultSummaryHint: llmDecomposition.resultSummaryHint,
+                }),
+              });
 
-            console.log(
-              `[job] LLM produced ${taskIds.length} tasks for "${llmDecomposition.jobTitle}"`
-            );
-          } else {
-            const tasks = decomposeJob(getJob(job.id)!);
-            console.log(`[job] Heuristic decomposition created ${tasks.length} tasks`);
+              console.log(
+                `[job] LLM produced ${taskIds.length} tasks for "${llmDecomposition.jobTitle}"`
+              );
+            } else {
+              const tasks = decomposeJob(getJob(job.id)!);
+              console.log(`[job] Heuristic decomposition created ${tasks.length} tasks`);
+            }
           }
 
           updateJob(job.id, { status: "running", startedAt: Date.now() });
@@ -456,15 +516,27 @@ export function setupSocketHandlers(io: IO, port: number) {
 
       const task = getTask(taskId)!;
       const job = getJob(task.jobId)!;
+      const assignedVendorCount = Array.isArray(task.inputPayload.assignedVendors)
+        ? task.inputPayload.assignedVendors.length
+        : 0;
+      const criteriaCount = Array.isArray(task.inputPayload.criteria)
+        ? task.inputPayload.criteria.length
+        : 0;
       const opsCount =
-        typeof storedOutput?.opsCount === "number" ? storedOutput.opsCount : 0;
+        typeof storedOutput?.opsCount === "number"
+          ? storedOutput.opsCount
+          : task.jobType === "enterprise-analysis"
+          ? Math.max(assignedVendorCount * Math.max(criteriaCount, 1) * 12, assignedVendorCount)
+          : 0;
       const batchSize =
-        typeof task.inputPayload.batchSize === "number" ? task.inputPayload.batchSize : 0;
+        typeof task.inputPayload.batchSize === "number"
+          ? task.inputPayload.batchSize
+          : assignedVendorCount;
       const completionSample = summarizeTaskOutput(task);
       const workerIdsUsed = job.workerIdsUsed.includes(worker.id)
         ? job.workerIdsUsed
         : [...job.workerIdsUsed, worker.id];
-      const completionSamples = [...job.completionSamples, completionSample].slice(-8);
+      const completionSamples = [...job.completionSamples, completionSample].slice(-24);
       const existingContribution =
         job.workerContributions.find((entry) => entry.workerId === worker.id) ?? null;
       const nextContribution = {
@@ -532,12 +604,33 @@ export function setupSocketHandlers(io: IO, port: number) {
           const finalTasks = getTasksForJob(updatedJob.id);
           const result = reduceJobResults(finalJob, finalTasks);
 
-          if (finalJob.jobType !== "fractal-render") {
+          if (finalJob.jobType === "enterprise-analysis") {
+            try {
+              const markdown = await synthesizeEnterpriseMarkdown(
+                finalJob,
+                finalJob.vendorProfiles ?? [],
+                finalJob.completionSamples
+              );
+              const artifact = await createEnterpriseMarkdownArtifact(finalJob, markdown);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              result.summary = buildEnterpriseResultSummary(markdown);
+              result.outputLines = markdown
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 12);
+              result.metrics.artifactType = "markdown";
+              result.metrics.vendorCount = finalJob.vendorProfiles?.length ?? 0;
+              result.metrics.analysisDepth =
+                finalJob.benchmarkConfig?.analysisDepth ?? "standard";
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+            } catch (err) {
+              console.warn(`[reducer] Enterprise markdown synthesis failed for "${finalJob.title}":`, err);
+            }
+          } else if (finalJob.jobType !== "fractal-render") {
             try {
               const parsedMetadata = safeParseJobMetadata(finalJob.normalizedCommand);
-              const taskSummaries = finalTasks
-                .filter((t) => t.status === "completed")
-                .map((t) => summarizeTaskOutput(t));
+              const taskSummaries = finalJob.completionSamples;
 
               result.summary = await synthesizeResult(
                 finalJob.title,
@@ -658,19 +751,38 @@ function safeParseJobMetadata(normalizedCommand: string): {
 
 function summarizeTaskOutput(task: ReturnType<typeof getTask> extends infer T ? NonNullable<T> : never) {
   const output = task.outputPayload;
+  const role =
+    typeof task.inputPayload.role === "string" ? `${task.inputPayload.role}: ` : "";
   if (!output) return `${task.title}: completed`;
 
+  if (typeof output.markdown === "string") {
+    return `${role}${task.title}: ${output.markdown.replace(/\s+/g, " ").slice(0, 320)}`;
+  }
+
   if (typeof output.summary === "string") {
-    return `${task.title}: ${output.summary}`;
+    return `${role}${task.title}: ${output.summary}`;
   }
 
   if (typeof output.result === "string") {
-    return `${task.title}: ${output.result}`;
+    return `${role}${task.title}: ${output.result}`;
   }
 
   if (typeof output.durationMs === "number") {
     return `${task.title}: completed in ${Math.round(output.durationMs)}ms`;
   }
 
-  return `${task.title}: ${JSON.stringify(output)}`;
+  return `${role}${task.title}: ${JSON.stringify(output)}`;
+}
+
+function normalizeBenchmarkConfig(
+  config: EnterpriseBenchmarkConfig | undefined
+): EnterpriseBenchmarkConfig | undefined {
+  if (!config || config.benchmarkType !== "enterprise-vendor-risk-selection") return undefined;
+
+  return {
+    benchmarkType: config.benchmarkType,
+    difficulty: Math.min(Math.max(Math.round(config.difficulty), 1), 100),
+    vendorCount: Math.max(1, Math.round(config.vendorCount)),
+    analysisDepth: config.analysisDepth,
+  };
 }

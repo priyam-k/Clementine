@@ -5,6 +5,15 @@ import type { WireResult } from "../lib/shared-types";
 
 const RESULTS_DIR = join(process.cwd(), "results");
 
+function sanitizeFilename(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
@@ -120,6 +129,15 @@ export async function writeResultsMd(
   const filepath = join(RESULTS_DIR, filename);
   await writeFile(filepath, content, "utf-8");
 
+  console.log(`[results] Written ${filepath}`);
+  return filepath;
+}
+
+export async function writeMarkdownArtifact(filenameBase: string, content: string): Promise<string> {
+  await mkdir(RESULTS_DIR, { recursive: true });
+  const safeBase = sanitizeFilename(filenameBase) || `artifact-${Date.now()}`;
+  const filepath = join(RESULTS_DIR, `${safeBase}.md`);
+  await writeFile(filepath, content, "utf-8");
   console.log(`[results] Written ${filepath}`);
   return filepath;
 }

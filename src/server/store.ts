@@ -6,6 +6,9 @@ import type {
   FractalJobConfig,
   JobType,
   WorkerTelemetry,
+  EnterpriseBenchmarkConfig,
+  VendorProfile,
+  WireArtifact,
 } from "../lib/shared-types";
 import { benchmarkPixelsPerSecond } from "../lib/worker-benchmark";
 
@@ -106,7 +109,7 @@ export function registerWorker(socketId: string, data: {
     device: data.device,
     type: "browser",
     status: "idle",
-    capabilities: ["mock-compute", "fractal-render"],
+    capabilities: ["mock-compute", "fractal-render", "llm-analysis", "batch-inference", "enterprise-analysis"],
     lastSeenAt: now,
     lastHeartbeatAt: now,
     connectedAt: now,
@@ -184,6 +187,8 @@ export function createJob(data: {
   title: string;
   sessionCode: string;
   fractalConfig?: FractalJobConfig;
+  benchmarkConfig?: EnterpriseBenchmarkConfig;
+  vendorProfiles?: VendorProfile[];
 }): ServerJob {
   jobCounter++;
   const id = `job_${jobCounter.toString().padStart(3, "0")}_${Date.now().toString(36)}`;
@@ -205,8 +210,11 @@ export function createJob(data: {
     workerIdsUsed: [],
     completionSamples: [],
     workerContributions: [],
+    artifacts: [],
     sessionCode: data.sessionCode,
     fractalConfig: data.fractalConfig,
+    benchmarkConfig: data.benchmarkConfig,
+    vendorProfiles: data.vendorProfiles,
   };
   jobs.set(id, job);
   return job;
@@ -361,10 +369,22 @@ export function toWireJob(j: ServerJob): WireJob {
     completedTasks: j.completedTasks,
     failedTasks: j.failedTasks,
     workerContributions: j.workerContributions,
+    artifacts: j.artifacts,
     result: j.result,
     // Attach computed progress as a non-standard field the client can use
     ...(({ progress } as unknown) as Record<string, unknown>),
   } as WireJob & { progress: number };
+}
+
+export function appendJobArtifact(jobId: string, artifact: WireArtifact): ServerJob | undefined {
+  const job = jobs.get(jobId);
+  if (!job) return undefined;
+  const updated = {
+    ...job,
+    artifacts: [...job.artifacts, artifact].sort((a, b) => b.createdAt - a.createdAt),
+  };
+  jobs.set(jobId, updated);
+  return updated;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

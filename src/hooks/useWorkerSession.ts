@@ -153,7 +153,9 @@ export function useWorkerSession(): WorkerSessionState {
       const executor =
         task.jobType === "fractal-render"
           ? executeFractalTileTask
-          : task.jobType === "batch-inference" || task.jobType === "llm-analysis"
+          : task.jobType === "batch-inference" ||
+            task.jobType === "llm-analysis" ||
+            task.jobType === "enterprise-analysis"
           ? async (t: WireTask, onProgress: (p: number) => void) => {
               onProgress(15);
               const result = await executeK2InferenceTask(t);

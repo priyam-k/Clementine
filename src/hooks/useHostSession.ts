@@ -10,6 +10,7 @@ import type {
   WireTask,
   FractalTileInput,
   FractalTileResultPayload,
+  EnterpriseBenchmarkConfig,
 } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
@@ -27,6 +28,10 @@ export interface HostSessionState {
   schedulerBias: number;
   submitJob: (command: string) => void;
   submitFractalJob: (config: FractalJobConfig) => void;
+  submitEnterpriseBenchmark: (
+    command: string,
+    benchmarkConfig: EnterpriseBenchmarkConfig
+  ) => void;
   setSchedulerBias: (bias: number) => void;
   reconnect: () => void;
 }
@@ -73,7 +78,11 @@ export function useHostSession(): HostSessionState {
         });
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
-      } else if (task.jobType === "batch-inference" || task.jobType === "llm-analysis") {
+      } else if (
+        task.jobType === "batch-inference" ||
+        task.jobType === "llm-analysis" ||
+        task.jobType === "enterprise-analysis"
+      ) {
         socket.emit("task:progress", { taskId: task.id, progress: 15 });
         const output = await executeK2InferenceTask(task);
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
@@ -239,6 +248,18 @@ export function useHostSession(): HostSessionState {
     });
   }, []);
 
+  const submitEnterpriseBenchmark = useCallback(
+    (command: string, benchmarkConfig: EnterpriseBenchmarkConfig) => {
+      if (!command.trim()) return;
+      getSocket().emit("job:submit", {
+        command: command.trim(),
+        sessionCode: sessionCodeRef.current,
+        benchmarkConfig,
+      });
+    },
+    []
+  );
+
   const reconnect = useCallback(() => {
     const socket = getSocket();
     if (!socket.connected) socket.connect();
@@ -268,6 +289,7 @@ export function useHostSession(): HostSessionState {
     schedulerBias,
     submitJob,
     submitFractalJob,
+    submitEnterpriseBenchmark,
     setSchedulerBias,
     reconnect,
   };

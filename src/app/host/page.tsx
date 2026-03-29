@@ -17,6 +17,11 @@ import type { Job, Session, CommandEntry } from "@/lib/types";
 import type { WireJob, WireSession, FractalJobConfig } from "@/lib/shared-types";
 import { Users, WifiOff, Loader2, Layers, Leaf, Rocket } from "lucide-react";
 import { formatCarbonSaved, getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
+import {
+  buildEnterpriseBenchmarkCommand,
+  getEnterpriseBenchmarkConfig,
+  getEnterpriseDifficultyLabel,
+} from "@/lib/enterprise-benchmark";
 
 // Build fractal config from a difficulty value (1-100, log-linear scale)
 // Difficulty 1  → 600×400 px, 128 iter  ≈ 5–15 s  (1 worker)
@@ -73,6 +78,7 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
     startedAt: j.startedAt ? new Date(j.startedAt).toISOString() : undefined,
     completedAt: j.completedAt ? new Date(j.completedAt).toISOString() : undefined,
     estimatedCarbonSavedGrams: getJobCarbonSavedGrams(j),
+    artifacts: j.artifacts,
     subtasks: j.tasks.map((t) => ({
       id: t.id,
       label: t.title,
@@ -121,6 +127,7 @@ export default function HostPage() {
     fractalTiles,
     submitJob,
     submitFractalJob,
+    submitEnterpriseBenchmark,
     schedulerBias,
     setSchedulerBias,
     reconnect,
@@ -129,6 +136,14 @@ export default function HostPage() {
 
   const [difficulty, setDifficulty] = useState(40);
   const fractalConfig = useMemo(() => buildFractalConfig(difficulty), [difficulty]);
+  const enterpriseBenchmarkConfig = useMemo(
+    () => getEnterpriseBenchmarkConfig(difficulty),
+    [difficulty]
+  );
+  const enterpriseBenchmarkCommand = useMemo(
+    () => buildEnterpriseBenchmarkCommand(enterpriseBenchmarkConfig),
+    [enterpriseBenchmarkConfig]
+  );
 
   // Adapt wire types to component prop shapes
   const sortedJobs = useMemo(
@@ -325,13 +340,13 @@ export default function HostPage() {
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
-                  Fractal Render
+                  Benchmark Workloads
                 </p>
                 <h3 className="text-2xl font-black tracking-tighter text-[#120B09] mt-0.5">
-                  Real-Time Compute Demo
+                  Shared Difficulty Control
                 </h3>
                 <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif] mt-1">
-                  Launch a distributed Mandelbrot render across connected browser workers.
+                  Use the existing slider to scale both the fractal render and the enterprise multi-agent benchmark.
                 </p>
               </div>
               <div className="p-2 bg-[#F5F1EE] rounded-sm">
@@ -358,6 +373,7 @@ export default function HostPage() {
             />
             <div className="flex items-center justify-between mt-2 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
               <span>{fractalConfig.width}×{fractalConfig.height}</span>
+              <span>{enterpriseBenchmarkConfig.vendorCount} vendors</span>
               <span>{fractalConfig.maxIterations} iterations</span>
             </div>
 
@@ -369,6 +385,43 @@ export default function HostPage() {
             >
               {isFractalRunning ? "Fractal Running…" : "Launch Fractal Render"}
             </button>
+
+            <div className="mt-4 rounded-sm border border-[#120B09]/8 bg-[#F8F5F2] p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                    Enterprise Benchmark
+                  </p>
+                  <h4 className="text-lg font-black tracking-tight text-[#120B09]">
+                    Vendor Risk & Selection
+                  </h4>
+                  <p className="text-[11px] text-[#4A3935]/55 mt-1">
+                    {enterpriseBenchmarkConfig.vendorCount} vendors at{" "}
+                    {getEnterpriseDifficultyLabel(enterpriseBenchmarkConfig).toLowerCase()} depth with K2-led decomposition and synthesis.
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/35 font-[Inter,sans-serif]">
+                    Scope
+                  </p>
+                  <p className="text-2xl font-black tracking-tighter text-[#6f0600]">
+                    {enterpriseBenchmarkConfig.vendorCount}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() =>
+                  submitEnterpriseBenchmark(
+                    enterpriseBenchmarkCommand,
+                    enterpriseBenchmarkConfig
+                  )
+                }
+                disabled={!isConnected}
+                className="mt-4 w-full px-4 py-3 bg-[#120B09] text-white font-black text-[11px] uppercase tracking-widest rounded-sm hover:bg-[#2a1b17] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+              >
+                Launch Enterprise Benchmark
+              </button>
+            </div>
           </div>
 
           <div className="xl:col-span-3 bg-white p-6 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
