@@ -18,6 +18,8 @@ import {
   createJob,
   getJob,
   getTask,
+  getWorker,
+  deleteTask,
   updateTask,
   updateJob,
   updateWorker,
@@ -25,6 +27,9 @@ import {
   toWireJob,
   getTasksForJob,
   getHostSocketForSession,
+  updateSessionHostSocket,
+  updateSessionSchedulerBias,
+  rebindWorkerSocket,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -33,7 +38,10 @@ import { runJobGraph } from "./job-graph";
 import { executionBridges } from "./graph-nodes";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
-import { logTaskResult, persistJobSnapshot, persistTaskSnapshots } from "./mongo";
+import { persistJobSnapshot, persistWorkerSnapshots } from "./mongo";
+import { synthesizeResult } from "./llm-decomposer";
+import { handleWorkerJoin, type Worker as SchedulerWorker } from "./taskScheduler";
+import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -72,17 +80,26 @@ function mergeTelemetry(
 
 export function setupSocketHandlers(io: IO, port: number) {
   const localIP = getLocalIP();
+  const sessionWorkerState = new Map<string, Map<string, SchedulerWorker>>();
 
-  const persistJobAndTasks = (jobId: string) => {
+  const getSessionWorkerState = (sessionCode: string): Map<string, SchedulerWorker> => {
+    let state = sessionWorkerState.get(sessionCode);
+    if (!state) {
+      state = new Map<string, SchedulerWorker>();
+      sessionWorkerState.set(sessionCode, state);
+    }
+    return state;
+  };
+
+  const persistJobAndWorkers = (jobId: string) => {
     const job = getJob(jobId);
     if (!job) return;
     const wireJob = toWireJob(job);
     void persistJobSnapshot({ ...wireJob, sessionCode: job.sessionCode });
-    void persistTaskSnapshots(
-      wireJob.tasks.map((task) => ({
-        ...task,
+    void persistWorkerSnapshots(
+      getWorkersForSession(job.sessionCode).map((worker) => ({
+        ...toWireWorker(worker),
         sessionCode: job.sessionCode,
-        jobType: wireJob.jobType,
       }))
     );
   };
@@ -100,8 +117,8 @@ export function setupSocketHandlers(io: IO, port: number) {
         session.joinUrl = `http://${localIP}:${port}/join?code=${session.code}`;
         console.log(`[host] New session created: ${session.code}`);
       } else {
-        // Update host socket (re-connect case)
-        session.hostSocketId = socket.id;
+        // Update host socket and fast lookup map on re-connect
+        session = updateSessionHostSocket(session.code, socket.id) ?? session;
         console.log(`[host] Re-registered for session: ${session.code}`);
       }
 
@@ -114,6 +131,8 @@ export function setupSocketHandlers(io: IO, port: number) {
           sessionCode: session.code,
           isHost: true,
         });
+      } else {
+        rebindWorkerSocket(existingHostWorker.id, socket.id);
       }
 
       const workers = getWorkersForSession(session.code).map(toWireWorker);
@@ -125,14 +144,27 @@ export function setupSocketHandlers(io: IO, port: number) {
           joinUrl: session.joinUrl,
           startedAt: session.startedAt,
           hostName: session.hostName,
+          schedulerBias: session.schedulerBias,
         },
         workers,
         jobs,
       });
     });
 
+    socket.on("scheduler:bias:set", ({ sessionCode, bias }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? updateSessionHostSocket(sessionCode, socket.id);
+      if (!session) {
+        socket.emit("error", { message: "Host session not found" });
+        return;
+      }
+
+      updateSessionSchedulerBias(session.code, bias);
+    });
+
     // ── Worker joins ──────────────────────────────────────────────────────────
-    socket.on("worker:join", ({ sessionCode, name, device }) => {
+    socket.on("worker:join", async ({ sessionCode, name, device, lat, lon }) => {
       const session = getSession(sessionCode);
       if (!session) {
         socket.emit("error", { message: `Session ${sessionCode} not found` });
@@ -143,17 +175,41 @@ export function setupSocketHandlers(io: IO, port: number) {
       const existing = getWorkerBySocket(socket.id);
       if (existing && existing.sessionCode === sessionCode && existing.status !== "offline") {
         const workers = getWorkersForSession(sessionCode).map(toWireWorker);
+        socket.emit("worker:self", toWireWorker(existing));
         socket.emit("workers:update", workers);
         const hostSocketId = getHostSocketForSession(sessionCode);
         if (hostSocketId) runScheduler(io, sessionCode, hostSocketId);
         return;
       }
 
-      registerWorker(socket.id, { name, device, sessionCode });
+      const registeredWorker = registerWorker(socket.id, {
+        name,
+        device,
+        sessionCode,
+        lat,
+        lon,
+        activeTasks: 0,
+      });
+      const schedulerWorker = await handleWorkerJoin({
+        io,
+        socket,
+        sessionCode,
+        state: getSessionWorkerState(sessionCode),
+        workerId: registeredWorker.id,
+        lat,
+        lon,
+      });
+      updateWorker(registeredWorker.id, {
+        lat: schedulerWorker.lat,
+        lon: schedulerWorker.lon,
+        carbonIntensity: schedulerWorker.carbonIntensity,
+        activeTasks: schedulerWorker.activeTasks,
+      });
       console.log(`[worker] "${name}" joined session ${sessionCode}`);
 
       // Ack the worker
       const workers = getWorkersForSession(sessionCode).map(toWireWorker);
+      socket.emit("worker:self", toWireWorker(getWorker(registeredWorker.id) ?? registeredWorker));
       socket.emit("workers:update", workers);
 
       // Notify host
@@ -178,6 +234,10 @@ export function setupSocketHandlers(io: IO, port: number) {
         benchmark: benchmark ?? worker.benchmark,
         lastHeartbeatAt: Date.now(),
       });
+      const updatedWorker = getWorker(worker.id);
+      if (updatedWorker) {
+        socket.emit("worker:self", toWireWorker(updatedWorker));
+      }
 
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
       if (hostSocketId) {
@@ -189,8 +249,10 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Job submitted (text command) ──────────────────────────────────────────
-    socket.on("job:submit", ({ command }) => {
-      const session = getSessionByHostSocket(socket.id);
+    socket.on("job:submit", ({ command, sessionCode }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
       if (!session) {
         socket.emit("error", { message: "Host session not found" });
         return;
@@ -208,7 +270,7 @@ export function setupSocketHandlers(io: IO, port: number) {
       });
 
       console.log(`[job] Created "${title}" (${jobType}) for session ${session.code}`);
-      persistJobAndTasks(job.id);
+      persistJobAndWorkers(job.id);
 
       // Send initial job to host
       socket.emit("job:created", toWireJob(job));
@@ -224,14 +286,17 @@ export function setupSocketHandlers(io: IO, port: number) {
         } catch (err) {
           console.error(`[job-graph] job ${job.id} failed:`, err);
           updateJob(job.id, { status: "failed" });
+          persistJobAndWorkers(job.id);
           socket.emit("job:update", toWireJob(getJob(job.id)!));
         }
       })();
     });
 
     // ── Fractal job submitted directly ────────────────────────────────────────
-    socket.on("fractal:submit", (config: FractalJobConfig) => {
-      const session = getSessionByHostSocket(socket.id);
+    socket.on("fractal:submit", ({ config, sessionCode }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
       if (!session) {
         socket.emit("error", { message: "Host session not found" });
         return;
@@ -248,20 +313,20 @@ export function setupSocketHandlers(io: IO, port: number) {
       });
 
       console.log(`[fractal] Created job "${title}" for session ${session.code}`);
-      persistJobAndTasks(job.id);
+      persistJobAndWorkers(job.id);
       socket.emit("job:created", toWireJob(job));
 
       // Decompose immediately — no text-parsing delay needed
       updateJob(job.id, { status: "decomposing" });
-      persistJobAndTasks(job.id);
+      persistJobAndWorkers(job.id);
       socket.emit("job:update", toWireJob(getJob(job.id)!));
 
       const tasks = decomposeJob(getJob(job.id)!);
       console.log(`[fractal] ${tasks.length} tile tasks created`);
-      persistJobAndTasks(job.id);
+      persistJobAndWorkers(job.id);
 
       updateJob(job.id, { status: "running", startedAt: Date.now() });
-      persistJobAndTasks(job.id);
+      persistJobAndWorkers(job.id);
       socket.emit("job:update", toWireJob(getJob(job.id)!));
 
       runScheduler(io, session.code, socket.id);
@@ -278,7 +343,6 @@ export function setupSocketHandlers(io: IO, port: number) {
         status: "working",
         lastHeartbeatAt: Date.now(),
       });
-      if (progressTask) persistJobAndTasks(progressTask.jobId);
 
       // Notify host
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
@@ -314,34 +378,26 @@ export function setupSocketHandlers(io: IO, port: number) {
         taskForType?.jobType === "fractal-render" && input
           ? input.tileWidth * input.tileHeight
           : 0;
+      const completedCarbonIntensity = worker.carbonIntensity ?? 250;
+      const estimatedCarbonSavedGrams = estimateTaskCarbonSavedGrams(
+        taskDurationMs,
+        completedCarbonIntensity
+      );
 
       updateTask(taskId, {
         status: "completed",
         progress: 100,
         completedByWorkerId: worker.id,
         completedByWorkerName: worker.name,
+        completedCarbonIntensity,
+        estimatedCarbonSavedGrams,
         outputPayload: storedOutput,
         completedAt: now,
       });
-      if (taskForType) persistJobAndTasks(taskForType.jobId);
-      if (taskForType) {
-        void logTaskResult({
-          taskId: taskForType.id,
-          jobId: taskForType.jobId,
-          title: taskForType.title,
-          jobType: taskForType.jobType,
-          sessionCode: worker.sessionCode,
-          workerId: worker.id,
-          workerName: worker.name,
-          status: "completed",
-          durationMs: taskDurationMs,
-          output: storedOutput,
-        });
-      }
-
-      updateWorker(worker.id, {
+      const updatedWorker = updateWorker(worker.id, {
         status: "idle",
         currentTaskId: undefined,
+        activeTasks: Math.max((worker.activeTasks ?? 1) - 1, 0),
         tasksCompleted: worker.tasksCompleted + 1,
         lastTaskDurationMs: taskDurationMs,
         totalBusyMs: worker.totalBusyMs + taskDurationMs,
@@ -357,7 +413,42 @@ export function setupSocketHandlers(io: IO, port: number) {
 
       const task = getTask(taskId)!;
       const job = getJob(task.jobId)!;
-      const allTasks = getTasksForJob(job.id);
+      const opsCount =
+        typeof storedOutput?.opsCount === "number" ? storedOutput.opsCount : 0;
+      const batchSize =
+        typeof task.inputPayload.batchSize === "number" ? task.inputPayload.batchSize : 0;
+      const completionSample = summarizeTaskOutput(task);
+      const workerIdsUsed = job.workerIdsUsed.includes(worker.id)
+        ? job.workerIdsUsed
+        : [...job.workerIdsUsed, worker.id];
+      const completionSamples = [...job.completionSamples, completionSample].slice(-8);
+      const existingContribution =
+        job.workerContributions.find((entry) => entry.workerId === worker.id) ?? null;
+      const nextContribution = {
+        workerId: worker.id,
+        workerName: worker.name,
+        tasksCompleted: (existingContribution?.tasksCompleted ?? 0) + 1,
+        totalDurationMs: (existingContribution?.totalDurationMs ?? 0) + taskDurationMs,
+        opsCount: (existingContribution?.opsCount ?? 0) + opsCount,
+        pixelsRendered: (existingContribution?.pixelsRendered ?? 0) + renderedPixels,
+        carbonSavedGrams: (existingContribution?.carbonSavedGrams ?? 0) + estimatedCarbonSavedGrams,
+      };
+      const workerContributions = [
+        ...job.workerContributions.filter((entry) => entry.workerId !== worker.id),
+        nextContribution,
+      ].sort((a, b) => b.tasksCompleted - a.tasksCompleted || b.totalDurationMs - a.totalDurationMs);
+
+      deleteTask(taskId);
+      const updatedJob = updateJob(job.id, {
+        taskIds: job.taskIds.filter((id) => id !== taskId),
+        completedTasks: job.completedTasks + 1,
+        totalOps: job.totalOps + opsCount,
+        totalDataProcessed: job.totalDataProcessed + batchSize,
+        totalCarbonSavedGrams: job.totalCarbonSavedGrams + estimatedCarbonSavedGrams,
+        workerIdsUsed,
+        completionSamples,
+        workerContributions,
+      })!;
 
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
 
@@ -381,16 +472,14 @@ export function setupSocketHandlers(io: IO, port: number) {
       }
 
       // Check if job is fully done
-      const allDone = allTasks.every(
-        (t) => t.status === "completed" || t.status === "failed"
-      );
+      const allDone = updatedJob.completedTasks + updatedJob.failedTasks >= updatedJob.totalTasks;
 
       if (allDone) {
-        const completedJob = updateJob(job.id, {
+        const completedJob = updateJob(updatedJob.id, {
           status: "reducing",
           completedAt: now,
         })!;
-        persistJobAndTasks(completedJob.id);
+        persistJobAndWorkers(completedJob.id);
 
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
@@ -406,13 +495,35 @@ export function setupSocketHandlers(io: IO, port: number) {
         // Legacy path: fractal jobs (not graph-managed)
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
-          const finalJob = getJob(job.id)!;
-          const finalTasks = getTasksForJob(job.id);
+          const finalJob = getJob(updatedJob.id)!;
+          const finalTasks = getTasksForJob(updatedJob.id);
           const result = reduceJobResults(finalJob, finalTasks);
 
-          const finishedJob = updateJob(job.id, { status: "completed", result })!;
-          persistJobAndTasks(finishedJob.id);
-          console.log(`[reducer] Job "${job.title}" completed`);
+          if (finalJob.jobType !== "fractal-render") {
+            try {
+              const parsedMetadata = safeParseJobMetadata(finalJob.normalizedCommand);
+              const taskSummaries = finalTasks
+                .filter((t) => t.status === "completed")
+                .map((t) => summarizeTaskOutput(t));
+
+              result.summary = await synthesizeResult(
+                finalJob.title,
+                parsedMetadata.original ?? finalJob.rawPrompt,
+                taskSummaries,
+                parsedMetadata.resultSummaryHint ?? result.summary
+              );
+              result.outputLines = result.summary
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            } catch (err) {
+              console.warn(`[reducer] LLM synthesis failed for "${finalJob.title}":`, err);
+            }
+          }
+
+          const finishedJob = updateJob(updatedJob.id, { status: "completed", result, taskIds: [] })!;
+          persistJobAndWorkers(finishedJob.id);
+          console.log(`[reducer] Job "${updatedJob.title}" completed`);
 
           if (hostSocketId) {
             io.to(hostSocketId).emit("job:complete", {
@@ -427,9 +538,9 @@ export function setupSocketHandlers(io: IO, port: number) {
       } else {
         // Update job progress for host
         if (hostSocketId) {
-          io.to(hostSocketId).emit("job:update", toWireJob(job));
+          io.to(hostSocketId).emit("job:update", toWireJob(updatedJob));
         }
-        persistJobAndTasks(job.id);
+        persistJobAndWorkers(updatedJob.id);
 
         // Try to schedule next queued task to this now-idle worker
         if (hostSocketId) {
@@ -468,6 +579,7 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Worker disconnected
       const offlineWorker = markWorkerOffline(socket.id);
       if (offlineWorker) {
+        getSessionWorkerState(offlineWorker.sessionCode).delete(socket.id);
         const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
         if (hostSocketId) {
           const workers = getWorkersForSession(offlineWorker.sessionCode).map(toWireWorker);
@@ -481,8 +593,11 @@ export function setupSocketHandlers(io: IO, port: number) {
             assignedWorkerId: undefined,
             progress: 0,
           });
+          updateWorker(offlineWorker.id, {
+            activeTasks: 0,
+          });
           const task = getTask(offlineWorker.currentTaskId);
-          if (task) persistJobAndTasks(task.jobId);
+          if (task) persistJobAndWorkers(task.jobId);
           if (task) {
             const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
             if (hostSocketId) runScheduler(io, offlineWorker.sessionCode, hostSocketId);
@@ -491,4 +606,38 @@ export function setupSocketHandlers(io: IO, port: number) {
       }
     });
   });
+}
+
+function safeParseJobMetadata(normalizedCommand: string): {
+  original?: string;
+  resultSummaryHint?: string;
+} {
+  try {
+    const parsed = JSON.parse(normalizedCommand) as {
+      original?: string;
+      resultSummaryHint?: string;
+    };
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function summarizeTaskOutput(task: ReturnType<typeof getTask> extends infer T ? NonNullable<T> : never) {
+  const output = task.outputPayload;
+  if (!output) return `${task.title}: completed`;
+
+  if (typeof output.summary === "string") {
+    return `${task.title}: ${output.summary}`;
+  }
+
+  if (typeof output.result === "string") {
+    return `${task.title}: ${output.result}`;
+  }
+
+  if (typeof output.durationMs === "number") {
+    return `${task.title}: completed in ${Math.round(output.durationMs)}ms`;
+  }
+
+  return `${task.title}: ${JSON.stringify(output)}`;
 }

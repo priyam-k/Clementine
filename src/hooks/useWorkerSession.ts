@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { connectSocket, disconnectSocket, getSocket } from "./useSocket";
-import type { WireTask, FractalTileInput } from "@/lib/shared-types";
+import type { WireTask, FractalTileInput, WireWorker } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 import { executeK2InferenceTask } from "@/lib/inference-client";
@@ -81,9 +81,33 @@ export interface WorkerSessionState {
   workerStatus: "idle" | "working" | "done" | "offline";
   currentTask: WireTask | null;
   tasksCompleted: number;
+  selfWorker: WireWorker | null;
   joinSession: (sessionCode: string, name: string, device: string) => void;
   leaveSession: () => void;
   sessionCode: string;
+}
+
+async function resolveWorkerCoordinates(): Promise<{ lat: number; lon: number }> {
+  if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+    return { lat: 0, lon: 0 };
+  }
+
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+        });
+      },
+      () => resolve({ lat: 0, lon: 0 }),
+      {
+        enableHighAccuracy: false,
+        timeout: 3000,
+        maximumAge: 300000,
+      }
+    );
+  });
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -97,10 +121,11 @@ export function useWorkerSession(): WorkerSessionState {
   const [currentTask, setCurrentTask] = useState<WireTask | null>(null);
   const [tasksCompleted, setTasksCompleted] = useState(0);
   const [sessionCode, setSessionCode] = useState("");
+  const [selfWorker, setSelfWorker] = useState<WireWorker | null>(null);
 
   // Prevent double-execution in React Strict Mode
   const executingRef = useRef<string | null>(null);
-  const joinProfileRef = useRef<{ code: string; name: string; device: string } | null>(null);
+  const joinProfileRef = useRef<{ code: string; name: string; device: string; lat: number; lon: number } | null>(null);
   const profileSentRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -179,6 +204,8 @@ export function useWorkerSession(): WorkerSessionState {
           sessionCode: pendingJoin.code,
           name: pendingJoin.name,
           device: pendingJoin.device,
+          lat: pendingJoin.lat,
+          lon: pendingJoin.lon,
         });
         void publishProfile(pendingJoin.device);
       }
@@ -190,6 +217,9 @@ export function useWorkerSession(): WorkerSessionState {
     };
 
     socket.on("task:assigned", handleTaskAssigned);
+    socket.on("worker:self", (worker) => {
+      setSelfWorker(worker);
+    });
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
 
@@ -208,6 +238,7 @@ export function useWorkerSession(): WorkerSessionState {
 
     return () => {
       socket.off("task:assigned", handleTaskAssigned);
+      socket.off("worker:self");
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);
       clearInterval(metricsInterval);
@@ -217,24 +248,26 @@ export function useWorkerSession(): WorkerSessionState {
   const joinSession = useCallback((code: string, name: string, device: string) => {
     setConnectionState("connecting");
     setSessionCode(code);
-    joinProfileRef.current = { code, name, device };
     profileSentRef.current = null;
 
     const socket = connectSocket();
 
-    if (socket.connected) {
-      // Already connected — join immediately
-      socket.emit("worker:join", { sessionCode: code, name, device });
-      setConnectionState("connected");
-      setWorkerStatus("idle");
-      void (async () => {
+    void (async () => {
+      const { lat, lon } = await resolveWorkerCoordinates();
+      joinProfileRef.current = { code, name, device, lat, lon };
+
+      if (socket.connected) {
+        // Already connected — join immediately
+        socket.emit("worker:join", { sessionCode: code, name, device, lat, lon });
+        setConnectionState("connected");
+        setWorkerStatus("idle");
         const profile = await collectWorkerProfile(device);
         if (profile.device || profile.telemetry || profile.benchmark) {
           socket.emit("worker:profile", profile);
           profileSentRef.current = `${socket.id}:${device}`;
         }
-      })();
-    }
+      }
+    })();
     // If not yet connected, the on("connect") handler in useEffect
     // will pick up joinProfileRef.current and emit worker:join
   }, []);
@@ -246,6 +279,7 @@ export function useWorkerSession(): WorkerSessionState {
     setCurrentTask(null);
     setSessionCode("");
     setTasksCompleted(0);
+    setSelfWorker(null);
   }, []);
 
   return {
@@ -253,6 +287,7 @@ export function useWorkerSession(): WorkerSessionState {
     workerStatus,
     currentTask,
     tasksCompleted,
+    selfWorker,
     joinSession,
     leaveSession,
     sessionCode,

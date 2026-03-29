@@ -15,7 +15,8 @@ import { GlobalMetricsPanel } from "@/components/host/GlobalMetricsPanel";
 import { useHostSession } from "@/hooks/useHostSession";
 import type { Job, Session, CommandEntry } from "@/lib/types";
 import type { WireJob, WireSession, FractalJobConfig } from "@/lib/shared-types";
-import { Users, HardDrive, WifiOff, Loader2, Layers } from "lucide-react";
+import { Users, WifiOff, Loader2, Layers, Leaf, Rocket } from "lucide-react";
+import { formatCarbonSaved, getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
 
 // Build fractal config from a difficulty value (1-100, log-linear scale)
 // Difficulty 1  → 600×400 px, 128 iter  ≈ 5–15 s  (1 worker)
@@ -42,9 +43,9 @@ function buildFractalConfig(difficulty: number): FractalJobConfig {
 // ─── Wire → component type adapters ──────────────────────────────────────────
 
 function wireJobToComp(j: WireJob & { progress?: number }): Job {
-  const totalSubtasks = j.tasks.length;
-  const completedSubtasks = j.tasks.filter((t) => t.status === "completed").length;
-  const failedSubtasks = j.tasks.filter((t) => t.status === "failed").length;
+  const totalSubtasks = j.totalTasks;
+  const completedSubtasks = j.completedTasks;
+  const failedSubtasks = j.failedTasks;
   const runningProgress =
     totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
 
@@ -71,6 +72,7 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
     createdAt: new Date(j.createdAt).toISOString(),
     startedAt: j.startedAt ? new Date(j.startedAt).toISOString() : undefined,
     completedAt: j.completedAt ? new Date(j.completedAt).toISOString() : undefined,
+    estimatedCarbonSavedGrams: getJobCarbonSavedGrams(j),
     subtasks: j.tasks.map((t) => ({
       id: t.id,
       label: t.title,
@@ -80,6 +82,7 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
       startedAt: t.startedAt ? new Date(t.startedAt).toISOString() : undefined,
       completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : undefined,
     })),
+    workerContributions: j.workerContributions,
     result: j.result
       ? {
           summary: j.result.summary,
@@ -87,6 +90,10 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
           durationMs: j.result.durationMs,
           workerCount: j.result.workerCount,
           dataProcessed: j.result.dataProcessed,
+          estimatedCarbonSavedGrams:
+            typeof j.result.metrics.netCarbonSavedGrams === "number"
+              ? j.result.metrics.netCarbonSavedGrams
+              : getJobCarbonSavedGrams(j),
         }
       : undefined,
   };
@@ -106,14 +113,29 @@ function wireSessionToComp(s: WireSession, workerCount: number): Session {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function HostPage() {
-  const { isConnected, session, workers, jobs, fractalTiles, submitJob, submitFractalJob, reconnect } =
+  const {
+    isConnected,
+    session,
+    workers,
+    jobs,
+    fractalTiles,
+    submitJob,
+    submitFractalJob,
+    schedulerBias,
+    setSchedulerBias,
+    reconnect,
+  } =
     useHostSession();
 
   const [difficulty, setDifficulty] = useState(40);
   const fractalConfig = useMemo(() => buildFractalConfig(difficulty), [difficulty]);
 
   // Adapt wire types to component prop shapes
-  const compJobs = useMemo(() => jobs.map(wireJobToComp), [jobs]);
+  const sortedJobs = useMemo(
+    () => [...jobs].sort((a, b) => b.createdAt - a.createdAt),
+    [jobs]
+  );
+  const compJobs = useMemo(() => sortedJobs.map(wireJobToComp), [sortedJobs]);
   const compSession = useMemo(
     () =>
       session
@@ -132,28 +154,25 @@ export default function HostPage() {
   // Derive stat card data from live state
   const activeWorkers = workers.filter((w) => w.status !== "offline");
   const runningJobs = compJobs.filter((j) => j.status === "running");
-  const avgStorageUsage =
-    activeWorkers.length > 0
-      ? Math.round(
-          activeWorkers.reduce((sum, worker) => sum + (worker.telemetry?.storage?.usagePercent ?? 0), 0) /
-            activeWorkers.length
-        )
-      : 0;
+  const totalCarbonSavedGrams = useMemo(
+    () => sortedJobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
+    [sortedJobs]
+  );
 
   const activeJob = runningJobs.filter((j) => j.id !== jobs.find(j2 => j2.jobType === "fractal-render")?.id)[0] ?? null;
   const lastCompletedJob = compJobs.find((j) => j.status === "completed" && jobs.find(j2 => j2.id === j.id)?.jobType !== "fractal-render") ?? null;
 
   // Active fractal job (most recent fractal-render, running or completed)
   const fractalJob = useMemo(
-    () => jobs.find((j) => j.jobType === "fractal-render" && (j.status !== "queued")) ?? null,
-    [jobs]
+    () => sortedJobs.find((j) => j.jobType === "fractal-render" && (j.status !== "queued")) ?? null,
+    [sortedJobs]
   );
   const isFractalRunning = fractalJob?.status === "running" || fractalJob?.status === "decomposing" || fractalJob?.status === "reducing";
 
   // Build command history from jobs
   const commandHistory: CommandEntry[] = useMemo(
     () =>
-      jobs.map((j) => ({
+      sortedJobs.map((j) => ({
         id: j.id,
         text: j.rawPrompt,
         timestamp: new Date(j.createdAt).toISOString(),
@@ -167,7 +186,7 @@ export default function HostPage() {
             : "dispatched",
         jobId: j.id,
       })),
-    [jobs]
+    [sortedJobs]
   );
 
   const statCards = [
@@ -179,11 +198,11 @@ export default function HostPage() {
       accent: "text-[#6f0600]",
     },
     {
-      label: "Storage Usage",
-      value: avgStorageUsage > 0 ? `${avgStorageUsage}%` : "—",
-      sub: "Avg browser storage usage",
-      icon: HardDrive,
-      accent: "text-[#EF8354]",
+      label: "Net Carbon Saved",
+      value: formatCarbonSaved(totalCarbonSavedGrams),
+      sub: "Estimated vs 250 gCO2e/kWh baseline",
+      icon: Leaf,
+      accent: totalCarbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]",
     },
   ];
 
@@ -211,41 +230,6 @@ export default function HostPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Fractal difficulty + launch */}
-            <div className="flex items-center gap-2 bg-white border border-[#120B09]/5 rounded-sm px-3 py-2 shadow-sm">
-              <Layers size={11} className="text-[#6f0600] flex-shrink-0" />
-              <div className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
-                    Difficulty
-                  </span>
-                  <span className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif] w-5 text-right">
-                    {difficulty}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={100}
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(Number(e.target.value))}
-                  disabled={isFractalRunning}
-                  className="w-28 h-1 accent-[#EF8354] cursor-pointer disabled:opacity-40"
-                />
-                <span className="text-[8px] text-[#4A3935]/40 font-[Inter,sans-serif]">
-                  {fractalConfig.width}×{fractalConfig.height} · {fractalConfig.maxIterations} iter
-                </span>
-              </div>
-              <button
-                onClick={() => submitFractalJob(fractalConfig)}
-                disabled={!isConnected || isFractalRunning}
-                className="ml-1 px-3 py-2 bg-[#6f0600] text-white font-black text-[10px] uppercase tracking-widest rounded-sm hover:bg-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif] flex-shrink-0"
-                title={isFractalRunning ? "Fractal render in progress…" : "Launch distributed fractal render"}
-              >
-                {isFractalRunning ? "…" : "Launch"}
-              </button>
-            </div>
-
             {/* Worker avatars */}
             {activeWorkers.length > 0 && (
               <div className="flex -space-x-2">
@@ -309,7 +293,7 @@ export default function HostPage() {
         )}
 
         {/* Stat cards */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {statCards.map((stat) => {
             const Icon = stat.icon;
             return (
@@ -336,9 +320,99 @@ export default function HostPage() {
           })}
         </section>
 
+        <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 mb-10">
+          <div className="xl:col-span-2 bg-white p-5 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                  Fractal Render
+                </p>
+                <h3 className="text-2xl font-black tracking-tighter text-[#120B09] mt-0.5">
+                  Real-Time Compute Demo
+                </h3>
+                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif] mt-1">
+                  Launch a distributed Mandelbrot render across connected browser workers.
+                </p>
+              </div>
+              <div className="p-2 bg-[#F5F1EE] rounded-sm">
+                <Rocket size={18} className="text-[#6f0600]" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                Difficulty
+              </span>
+              <span className="text-sm font-black text-[#EF8354] font-[Inter,sans-serif]">
+                {difficulty}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={100}
+              value={difficulty}
+              onChange={(e) => setDifficulty(Number(e.target.value))}
+              disabled={isFractalRunning}
+              className="w-full h-2 accent-[#EF8354] cursor-pointer disabled:opacity-40"
+            />
+            <div className="flex items-center justify-between mt-2 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
+              <span>{fractalConfig.width}×{fractalConfig.height}</span>
+              <span>{fractalConfig.maxIterations} iterations</span>
+            </div>
+
+            <button
+              onClick={() => submitFractalJob(fractalConfig)}
+              disabled={!isConnected || isFractalRunning}
+              className="mt-5 w-full px-4 py-3 bg-[#6f0600] text-white font-black text-[11px] uppercase tracking-widest rounded-sm hover:bg-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+              title={isFractalRunning ? "Fractal render in progress…" : "Launch distributed fractal render"}
+            >
+              {isFractalRunning ? "Fractal Running…" : "Launch Fractal Render"}
+            </button>
+          </div>
+
+          <div className="xl:col-span-3 bg-white p-6 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                  Scheduler Bias
+                </p>
+                <h3 className="text-3xl font-black tracking-tighter text-[#120B09] mt-1">
+                  Choose Clean Energy vs Raw Speed
+                </h3>
+                <p className="text-sm text-[#4A3935]/55 max-w-2xl mt-2">
+                  Shift Clementine toward lower-carbon workers or push harder toward the fastest available browsers. This directly changes how new work is assigned.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif]">
+                  Current Bias
+                </p>
+                <p className="text-4xl font-black tracking-tighter text-[#EF8354]">
+                  {Math.round(schedulerBias * 100)}%
+                </p>
+              </div>
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(schedulerBias * 100)}
+              onChange={(e) => setSchedulerBias(Number(e.target.value) / 100)}
+              className="w-full h-3 accent-[#6f0600] cursor-pointer"
+            />
+            <div className="flex items-center justify-between mt-3 text-[11px] font-black uppercase tracking-widest font-[Inter,sans-serif]">
+              <span className="text-green-700">Emissions Efficient</span>
+              <span className="text-[#4A3935]/35">Balanced</span>
+              <span className="text-[#6f0600]">Best Performance</span>
+            </div>
+          </div>
+        </section>
+
         {/* Global metrics graphs */}
         {workers.length > 0 && (
-          <GlobalMetricsPanel workers={workers} />
+          <GlobalMetricsPanel workers={workers} jobs={jobs} />
         )}
 
         {/* Top grid: Session + QR + Voice + Composer */}
