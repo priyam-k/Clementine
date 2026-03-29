@@ -51,12 +51,13 @@ export default function LandingPage() {
         </div>
       </header>
 
-      {/* Hero — fixed layout, no absolute overflow */}
-      <section className="relative overflow-hidden px-6 pt-20 pb-16 md:pt-28 md:pb-20 flex flex-col items-center text-center">
+      {/* Hero — two-column layout */}
+      <section className="relative overflow-hidden px-6 pt-20 pb-16 md:pt-28 md:pb-20 flex flex-col md:flex-row items-center gap-12">
         {/* Decorative grid */}
         <div className="absolute inset-0 pointer-events-none opacity-30" style={{ backgroundImage: `linear-gradient(to right, #EF835408 1px, transparent 1px), linear-gradient(to bottom, #EF835408 1px, transparent 1px)`, backgroundSize: "80px 80px" }} />
 
-        <div className="relative z-10 max-w-5xl w-full space-y-8">
+        {/* Left column — text content */}
+        <div className="relative z-10 flex-1 max-w-2xl space-y-8">
           {/* Eyebrow */}
           <div className="inline-flex items-center gap-3 px-4 py-2 bg-white border border-[#EDE7E3] rounded-full shadow-sm">
             <span className="w-2 h-2 rounded-full bg-[#EF8354] animate-pulse" />
@@ -71,13 +72,13 @@ export default function LandingPage() {
           </h1>
 
           {/* Subhead */}
-          <p className="text-lg md:text-xl text-[#4A3935] max-w-2xl mx-auto leading-relaxed font-medium">
+          <p className="text-lg md:text-xl text-[#4A3935] max-w-xl leading-relaxed font-medium">
             Reject generic clouds. Transform idle home devices into a private compute cluster.
             Plant your tasks and harvest local results.
           </p>
 
           {/* CTAs */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <div className="flex flex-col sm:flex-row items-start gap-3 pt-2">
             <Link href="/host" className="w-full sm:w-auto bg-[#EF8354] text-white px-10 py-5 text-xs font-black uppercase tracking-widest hover:bg-[#120B09] transition-all flex items-center justify-center gap-3 rounded-sm">
               Enter Dashboard <ArrowUpRight size={14} />
             </Link>
@@ -86,8 +87,8 @@ export default function LandingPage() {
             </Link>
           </div>
 
-          {/* Stat strip — inline, no overlap */}
-          <div className="grid grid-cols-3 gap-3 max-w-lg mx-auto pt-6">
+          {/* Stat strip */}
+          <div className="grid grid-cols-3 gap-3 max-w-lg pt-6">
             {[
               { val: "Local", label: "Private network" },
               { val: "Any", label: "Device supported" },
@@ -99,6 +100,18 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Right column — looping video */}
+        <div className="relative z-10 hidden md:flex flex-1 items-center justify-center">
+          <video
+            src="/hero.mp4"
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="w-full max-w-lg rounded-xl object-cover shadow-2xl"
+          />
         </div>
       </section>
 
