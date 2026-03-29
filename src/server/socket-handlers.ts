@@ -226,59 +226,6 @@ export function setupSocketHandlers(io: IO, port: number) {
           updateJob(job.id, { status: "failed" });
           socket.emit("job:update", toWireJob(getJob(job.id)!));
         }
-      // Decompose — try LLM first, fall back to keyword heuristics
-      updateJob(job.id, { status: "decomposing" });
-      persistJobAndTasks(job.id);
-      socket.emit("job:update", toWireJob(getJob(job.id)!));
-
-      (async () => {
-        const llmResult = await decomposeWithLLM(command);
-
-        if (llmResult) {
-          console.log(`[llm-decomposer] ${llmResult.tasks.length} tasks for "${llmResult.jobTitle}"`);
-          // Update title to LLM-generated one
-          updateJob(job.id, {
-            title: llmResult.jobTitle,
-            // Store hint for result synthesis
-            normalizedCommand: JSON.stringify({ hint: llmResult.resultSummaryHint, original: command }),
-          });
-
-          // Create tasks from LLM spec
-          const { createTask, updateJob: upJob } = await import("./store");
-          const createdIds: string[] = [];
-          for (const spec of llmResult.tasks) {
-            const t = createTask({
-              jobId: job.id,
-              title: spec.title,
-              description: spec.description,
-              jobType: jobType,
-              status: "queued",
-              progress: 0,
-              inputPayload: {
-                batchSize: Math.floor(1000 + spec.complexity * 1500),
-                complexity: spec.complexity,
-                operationType: jobType,
-                dataLabel: spec.dataLabel ?? llmResult.jobTitle,
-                estimatedSeconds: spec.estimatedSeconds,
-                seed: Math.floor(Math.random() * 100000),
-              },
-            });
-            createdIds.push(t.id);
-          }
-          upJob(job.id, { taskIds: createdIds });
-          persistJobAndTasks(job.id);
-        } else {
-          // Fallback: keyword-based decomposition
-          await new Promise<void>((r) => setTimeout(r, 200));
-          const tasks = decomposeJob(getJob(job.id)!);
-          console.log(`[decomposer] ${tasks.length} tasks for job "${title}" (heuristic)`);
-          persistJobAndTasks(job.id);
-        }
-
-        updateJob(job.id, { status: "running", startedAt: Date.now() });
-        persistJobAndTasks(job.id);
-        socket.emit("job:update", toWireJob(getJob(job.id)!));
-        runScheduler(io, session.code, socket.id);
       })();
     });
 
