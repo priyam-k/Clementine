@@ -8,44 +8,47 @@ import { generateGeminiText } from "./gemini";
 export interface LLMTaskSpec {
   title: string;
   description: string;
+  taskPrompt: string;       // complete, standalone K2 prompt — the actual work this worker runs
   complexity: number;       // 1-5
-  estimatedSeconds: number; // rough estimate for mock timing
+  estimatedSeconds: number;
   dataLabel?: string;
 }
 
 export interface LLMDecomposition {
   jobTitle: string;
   tasks: LLMTaskSpec[];
-  resultSummaryHint: string; // hint for the reducer to generate a good result
+  resultSummaryHint: string;
 }
 
-const SYSTEM_PROMPT = `You are the intelligent task orchestrator for Clementine, a distributed computing platform.
+const SYSTEM_PROMPT = `You are the task orchestrator for Clementine, a distributed computing platform.
 
-When given a user's request, decompose it into 5–10 concrete parallel subtasks that can be
-distributed across browser-based worker nodes. Each worker is a CPU capable of running
-computation, data analysis, or inference tasks.
+Each worker node runs K2-Think (a reasoning LLM) in parallel. Your job: decompose the user's
+request into 4–8 independent subtasks so that all workers run simultaneously, producing the
+final answer faster than any single device could.
 
-Think like a senior data engineer: identify the stages of the pipeline (fetch, process, analyze,
-aggregate), estimate complexity, and break the work into independent chunks that can run in
-parallel.
+Rules:
+- Each task must be entirely self-contained. The worker ONLY sees its own taskPrompt — no other context.
+- Each task must produce a real, concrete, useful piece of the answer on its own.
+- Tasks must cover distinct aspects so their outputs combine into a complete response.
+- taskPrompt must be a direct, complete instruction to K2. Embed all necessary context inline.
+- Never reference other tasks ("see task 2") or use placeholders ("[data here]").
+- If the request involves data the workers cannot access (URLs, files), include representative
+  inline context or instruct the worker to reason from known facts about the domain.
 
-IMPORTANT: For tasks involving external data (YouTube, URLs, APIs), include realistic data
-in the task descriptions so workers can simulate meaningful processing. Generate plausible
-mock data summaries inline.
-
-Respond ONLY with valid JSON matching this exact schema:
+Respond ONLY with valid JSON:
 {
-  "jobTitle": "short title under 60 chars",
+  "jobTitle": "concise title under 60 chars",
   "tasks": [
     {
       "title": "short task name",
-      "description": "detailed description of what this worker should do, including any mock data",
+      "description": "one sentence: what concrete output this task produces",
+      "taskPrompt": "Complete standalone prompt for K2. All context inline. Demand specific, concrete output.",
       "complexity": 1-5,
       "estimatedSeconds": 2-15,
-      "dataLabel": "optional data label shown in UI"
+      "dataLabel": "optional UI label"
     }
   ],
-  "resultSummaryHint": "1-2 sentences describing what the final aggregate result should contain"
+  "resultSummaryHint": "what the final synthesis should produce by combining all task outputs"
 }`;
 
 let client: Anthropic | null = null;
@@ -78,6 +81,13 @@ export async function decomposeWithLLM(command: string): Promise<LLMDecompositio
       return null;
     }
 
+    // Ensure every task has a real taskPrompt
+    for (const task of parsed.tasks) {
+      if (!task.taskPrompt || typeof task.taskPrompt !== "string" || task.taskPrompt.trim().length < 20) {
+        task.taskPrompt = task.description || task.title;
+      }
+    }
+
     return parsed;
   } catch (err) {
     console.warn("[llm-decomposer] Failed:", err);
@@ -96,15 +106,17 @@ export async function synthesizeResult(
     return await generateGeminiText({
       systemInstruction: [
         "You are Clementine's final result synthesizer.",
-        "Produce one clean, user-facing summary for a completed distributed job.",
-        "Use only the supplied job request and completed task outputs as evidence.",
-        "Do not mention prompts, parsing, hidden reasoning, or internal analysis.",
-        "Keep it concise, quantitative where possible, and readable in markdown-friendly prose.",
+        "Produce a concise, user-facing answer to the original request — nothing more.",
+        "Lead with the direct answer. Include only information the user explicitly asked for.",
+        "Do not add introductions, transitions, meta-commentary, or conclusions.",
+        "Do not mention prompts, workers, tasks, parsing, or internal analysis.",
+        "Use markdown: bullet points or numbered lists for structured data, inline code for values.",
+        "Maximum length: 300 words unless the content is inherently longer (e.g. a list of 10+ items).",
       ].join(" "),
-      userPrompt: `Job title: "${jobTitle}"\nOriginal request: "${command}"\n\nCompleted task outputs:\n${taskSummaries
+      userPrompt: `Original request: "${command}"\n\nTask outputs:\n${taskSummaries
         .map((summary, index) => `${index + 1}. ${summary}`)
-        .join("\n")}\n\nHint: ${resultSummaryHint}\n\nGenerate the final user-facing result summary.`,
-      temperature: 0.2,
+        .join("\n")}\n\nHint: ${resultSummaryHint}\n\nReturn only the direct answer to the request.`,
+      temperature: 0.15,
     });
   } catch {
     return `${taskSummaries.length} tasks completed. ${resultSummaryHint}`;

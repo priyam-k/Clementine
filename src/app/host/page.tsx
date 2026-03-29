@@ -265,8 +265,16 @@ export default function HostPage() {
             </h1>
             <p className="text-[#4A3935]/60 font-bold mt-2 text-xs uppercase tracking-widest font-[Inter,sans-serif]">
               Status:{" "}
-              <span className={isConnected ? "text-[#EF8354]" : "text-[#4A3935]/40"}>
-                {isConnected ? "Optimal Growth" : "Connecting..."}
+              <span
+                className={
+                  !isConnected
+                    ? "text-[#4A3935]/40"
+                    : runningJobs.length > 0
+                    ? "text-[#EF8354]"
+                    : "text-green-700"
+                }
+              >
+                {!isConnected ? "Off Network" : runningJobs.length > 0 ? "Busy" : "Online"}
               </span>
               {session && ` • Session ${session.code}`}
             </p>

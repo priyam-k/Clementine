@@ -26,7 +26,7 @@ export default function Hero() {
   }, [])
 
   return (
-    <section className="relative bg-[#FAF7F2] min-h-[90vh] flex items-center overflow-hidden">
+    <section className="relative min-h-[90vh] flex items-center overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 md:px-10 w-full py-20 lg:py-0 grid grid-cols-1 lg:grid-cols-[54%_46%] gap-8 lg:gap-6 items-center">
 
         {/* Text column */}

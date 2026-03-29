@@ -33,6 +33,8 @@ import {
   updateSessionSchedulerBias,
   rebindWorkerSocket,
   appendJobArtifact,
+  getAllSessions,
+  toWireTask,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -90,9 +92,16 @@ function mergeTelemetry(
   };
 }
 
+const DISCONNECT_REQUEUE_DELAY_MS = 8_000;
+const HEARTBEAT_TIMEOUT_MS = 40_000;
+const HEARTBEAT_CHECK_INTERVAL_MS = 15_000;
+
 export function setupSocketHandlers(io: IO, port: number) {
   const localIP = getLocalIP();
   const sessionWorkerState = new Map<string, Map<string, SchedulerWorker>>();
+
+  // workerId → timer handle; cancelled if the worker reconnects in time
+  const pendingRequeue = new Map<string, ReturnType<typeof setTimeout>>();
 
   const getSessionWorkerState = (sessionCode: string): Map<string, SchedulerWorker> => {
     let state = sessionWorkerState.get(sessionCode);
@@ -195,6 +204,50 @@ export function setupSocketHandlers(io: IO, port: number) {
         socket.emit("workers:update", workers);
         const hostSocketId = getHostSocketForSession(sessionCode);
         if (hostSocketId) runScheduler(io, sessionCode, hostSocketId);
+        return;
+      }
+
+      // Reconnect detection: look for an offline worker with same name in this session
+      const offlineMatch = getWorkersForSession(sessionCode).find(
+        (w) => w.name === name && w.status === "offline"
+      );
+      if (offlineMatch) {
+        // Cancel the pending requeue timer — the worker is back
+        const pendingTimer = pendingRequeue.get(offlineMatch.id);
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          pendingRequeue.delete(offlineMatch.id);
+          console.log(`[resilience] Worker "${name}" reconnected. Cancelled requeue timer.`);
+        }
+        // Rebind the worker to the new socket
+        rebindWorkerSocket(offlineMatch.id, socket.id);
+        updateWorker(offlineMatch.id, { status: "idle", lastHeartbeatAt: Date.now() });
+        getSessionWorkerState(sessionCode).delete(offlineMatch.socketId);
+
+        const updatedWorker = getWorker(offlineMatch.id);
+        if (updatedWorker) {
+          const workers = getWorkersForSession(sessionCode).map(toWireWorker);
+          socket.emit("worker:self", toWireWorker(updatedWorker));
+          socket.emit("workers:update", workers);
+          const hostSocketId = getHostSocketForSession(sessionCode);
+          if (hostSocketId) {
+            io.to(hostSocketId).emit("workers:update", workers);
+            // Re-send any in-progress task so the worker can resume immediately
+            if (offlineMatch.currentTaskId) {
+              const inProgressTask = getTask(offlineMatch.currentTaskId);
+              if (inProgressTask && inProgressTask.status === "running") {
+                console.log(
+                  `[resilience] Re-sending task ${inProgressTask.id} to reconnected worker "${name}".`
+                );
+                socket.emit("task:assigned", toWireTask(inProgressTask));
+              } else {
+                runScheduler(io, sessionCode, hostSocketId);
+              }
+            } else {
+              runScheduler(io, sessionCode, hostSocketId);
+            }
+          }
+        }
         return;
       }
 
@@ -665,6 +718,14 @@ export function setupSocketHandlers(io: IO, port: number) {
         persistJobAndWorkers(completedJob.id);
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
+        // Hand off to the graph reduce node if this job is graph-managed
+        const failedBridgeResolve = executionBridges.get(job.id);
+        if (failedBridgeResolve) {
+          failedBridgeResolve();
+          return;
+        }
+
+        // Standalone fallback reduce (enterprise jobs, or legacy non-graph path)
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
           const finalJob = getJob(updatedJob.id)!;
@@ -711,7 +772,7 @@ export function setupSocketHandlers(io: IO, port: number) {
             taskIds: [],
           })!;
           persistJobAndWorkers(finishedJob.id);
-          console.log(`[reducer] Job "${updatedJob.title}" completed (with ${updatedJob.failedTasks} failed tasks)`);
+          console.log(`[reducer] Job "${updatedJob.title}" completed (${updatedJob.failedTasks} failed tasks)`);
 
           if (hostSocketId) {
             io.to(hostSocketId).emit("job:complete", {
@@ -764,26 +825,85 @@ export function setupSocketHandlers(io: IO, port: number) {
           io.to(hostSocketId).emit("workers:update", workers);
         }
 
-        // If the worker had an assigned task, requeue it
+        // If the worker had an assigned task, give it a cooldown to reconnect
+        // before reassigning the task to another worker.
         if (offlineWorker.currentTaskId) {
-          updateTask(offlineWorker.currentTaskId, {
-            status: "queued",
-            assignedWorkerId: undefined,
-            progress: 0,
-          });
-          updateWorker(offlineWorker.id, {
-            activeTasks: 0,
-          });
-          const task = getTask(offlineWorker.currentTaskId);
-          if (task) persistJobAndWorkers(task.jobId);
-          if (task) {
-            const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
-            if (hostSocketId) runScheduler(io, offlineWorker.sessionCode, hostSocketId);
-          }
+          const workerId = offlineWorker.id;
+          const taskId = offlineWorker.currentTaskId;
+          const sessionCode = offlineWorker.sessionCode;
+          console.log(
+            `[resilience] Worker "${offlineWorker.name}" dropped with task ${taskId}. ` +
+            `Waiting ${DISCONNECT_REQUEUE_DELAY_MS}ms for reconnect.`
+          );
+          const timer = setTimeout(() => {
+            pendingRequeue.delete(workerId);
+            // Only requeue if the task is still assigned to this (now-offline) worker
+            const task = getTask(taskId);
+            if (task && task.assignedWorkerId === workerId && task.status === "running") {
+              console.log(
+                `[resilience] Worker "${offlineWorker.name}" did not reconnect. Requeuing task ${taskId}.`
+              );
+              updateTask(taskId, { status: "queued", assignedWorkerId: undefined, progress: 0 });
+              updateWorker(workerId, { activeTasks: 0 });
+              persistJobAndWorkers(task.jobId);
+              const hostSocketId = getHostSocketForSession(sessionCode);
+              if (hostSocketId) runScheduler(io, sessionCode, hostSocketId);
+            }
+          }, DISCONNECT_REQUEUE_DELAY_MS);
+          pendingRequeue.set(workerId, timer);
         }
       }
     });
   });
+
+  // ── Heartbeat watchdog ───────────────────────────────────────────────────────
+  // Workers that go silent (crash, sleep, network fault) without firing "disconnect"
+  // will linger as "working" forever. This interval detects them and requeues their tasks.
+  setInterval(() => {
+    const now = Date.now();
+    for (const session of getAllSessions()) {
+      for (const worker of getWorkersForSession(session.code)) {
+        if (worker.status !== "working" && worker.status !== "idle") continue;
+        if (!worker.lastHeartbeatAt) continue;
+        const silent = now - worker.lastHeartbeatAt;
+        if (silent < HEARTBEAT_TIMEOUT_MS) continue;
+
+        // Worker has been silent too long
+        console.log(
+          `[heartbeat] Worker "${worker.name}" silent for ${Math.round(silent / 1000)}s. ` +
+          `Marking offline.`
+        );
+        markWorkerOffline(worker.socketId);
+
+        const hostSocketId = getHostSocketForSession(session.code);
+        if (hostSocketId) {
+          io.to(hostSocketId).emit(
+            "workers:update",
+            getWorkersForSession(session.code).map(toWireWorker)
+          );
+        }
+
+        if (worker.currentTaskId && !pendingRequeue.has(worker.id)) {
+          const workerId = worker.id;
+          const taskId = worker.currentTaskId;
+          const sessionCode = session.code;
+          const timer = setTimeout(() => {
+            pendingRequeue.delete(workerId);
+            const task = getTask(taskId);
+            if (task && task.assignedWorkerId === workerId && task.status === "running") {
+              console.log(`[heartbeat] Requeuing task ${taskId} from silent worker "${worker.name}".`);
+              updateTask(taskId, { status: "queued", assignedWorkerId: undefined, progress: 0 });
+              updateWorker(workerId, { activeTasks: 0 });
+              persistJobAndWorkers(task.jobId);
+              const hid = getHostSocketForSession(sessionCode);
+              if (hid) runScheduler(io, sessionCode, hid);
+            }
+          }, DISCONNECT_REQUEUE_DELAY_MS);
+          pendingRequeue.set(workerId, timer);
+        }
+      }
+    }
+  }, HEARTBEAT_CHECK_INTERVAL_MS);
 }
 
 function safeParseJobMetadata(normalizedCommand: string): {
