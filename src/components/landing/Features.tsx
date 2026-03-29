@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState } from 'react'
-import { motion, AnimatePresence, useScroll, useMotionValueEvent } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 
 // ─── Step data ────────────────────────────────────────────────────────────────
 
@@ -676,15 +676,93 @@ const VIZZES = [MeshViz, VoiceViz, ComputeViz, LocalViz]
 export default function Features() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [activeStep, setActiveStep] = useState(0)
+  const stepRef = useRef(0)
+  const cooldownRef = useRef(false)
+  const animatingRef = useRef(false) // true during a programmatic smooth scroll
 
-  const { scrollYProgress } = useScroll({
-    target: containerRef,
-    offset: ['start start', 'end end'],
-  })
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
 
-  useMotionValueEvent(scrollYProgress, 'change', v => {
-    setActiveStep(Math.min(3, Math.floor(v * 4)))
-  })
+    // Fresh absolute top each call — avoids stale offsetTop after layout shifts.
+    const containerTop = () => container.getBoundingClientRect().top + window.scrollY
+
+    // Snap to 10% into each step's quarter-range so we land clearly inside it
+    // and maximise distance from the previous boundary.
+    const scrollForStep = (step: number) => {
+      const scrollable = container.offsetHeight - window.innerHeight
+      return containerTop() + ((step + 0.1) / 4) * scrollable
+    }
+
+    const inSection = () => {
+      const y = window.scrollY
+      const top = containerTop()
+      return y >= top - 50 && y <= top + container.offsetHeight - window.innerHeight + 50
+    }
+
+    const goToStep = (next: number) => {
+      stepRef.current = next
+      setActiveStep(next)
+      // Block the scroll fallback for the full animation duration.
+      cooldownRef.current = true
+      animatingRef.current = true
+      window.scrollTo({ top: scrollForStep(next), behavior: 'smooth' })
+      setTimeout(() => {
+        cooldownRef.current = false
+        animatingRef.current = false
+      }, 900)
+    }
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!inSection()) return
+
+      const dir = e.deltaY > 0 ? 1 : -1
+      const next = Math.max(0, Math.min(3, stepRef.current + dir))
+
+      // At the boundary let the page scroll naturally past the section.
+      if (next === stepRef.current) return
+
+      e.preventDefault()
+      if (cooldownRef.current) return
+      goToStep(next)
+    }
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (!inSection()) return
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+
+      const dir = e.key === 'ArrowDown' ? 1 : -1
+      const next = Math.max(0, Math.min(3, stepRef.current + dir))
+      if (next === stepRef.current) return
+
+      e.preventDefault()
+      if (cooldownRef.current) return
+      goToStep(next)
+    }
+
+    // Fallback: sync step when the user drags the scrollbar.
+    // Blocked while animatingRef is true so it can't fight a smooth scroll.
+    const handleScroll = () => {
+      if (animatingRef.current || !inSection()) return
+      const top = containerTop()
+      const scrollable = container.offsetHeight - window.innerHeight
+      const v = Math.max(0, Math.min(1, (window.scrollY - top) / scrollable))
+      const step = Math.min(3, Math.floor(v * 4))
+      if (step !== stepRef.current) {
+        stepRef.current = step
+        setActiveStep(step)
+      }
+    }
+
+    window.addEventListener('wheel', handleWheel, { passive: false })
+    window.addEventListener('keydown', handleKey)
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    return () => {
+      window.removeEventListener('wheel', handleWheel)
+      window.removeEventListener('keydown', handleKey)
+      window.removeEventListener('scroll', handleScroll)
+    }
+  }, [])
 
   return (
     <section ref={containerRef} id="how-it-works" className="relative bg-[#120B09]" style={{ height: '400vh' }}>
