@@ -665,6 +665,14 @@ export function setupSocketHandlers(io: IO, port: number) {
         persistJobAndWorkers(completedJob.id);
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
+        // Hand off to the graph reduce node if this job is graph-managed
+        const failedBridgeResolve = executionBridges.get(job.id);
+        if (failedBridgeResolve) {
+          failedBridgeResolve();
+          return;
+        }
+
+        // Standalone fallback reduce (enterprise jobs, or legacy non-graph path)
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
           const finalJob = getJob(updatedJob.id)!;
@@ -711,7 +719,7 @@ export function setupSocketHandlers(io: IO, port: number) {
             taskIds: [],
           })!;
           persistJobAndWorkers(finishedJob.id);
-          console.log(`[reducer] Job "${updatedJob.title}" completed (with ${updatedJob.failedTasks} failed tasks)`);
+          console.log(`[reducer] Job "${updatedJob.title}" completed (${updatedJob.failedTasks} failed tasks)`);
 
           if (hostSocketId) {
             io.to(hostSocketId).emit("job:complete", {

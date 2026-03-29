@@ -31,17 +31,34 @@ type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 
 export const executionBridges = new Map<string, () => void>();
 
-const DECOMPOSE_SYSTEM_PROMPT = `You are the intelligent task orchestrator for Clementine, a distributed computing platform.
+const DECOMPOSE_SYSTEM_PROMPT = `You are the task orchestrator for Clementine, a distributed computing platform.
 
-When given a user's request, decompose it into 5–10 concrete parallel subtasks that can be
-distributed across browser-based worker nodes. Each worker is a CPU capable of running
-computation, data analysis, or inference tasks.
+Each worker runs K2-Think (a reasoning LLM) in parallel. Decompose the user's request into
+4–8 independent subtasks that run simultaneously across workers, producing the answer faster
+than any single device could alone.
 
-Think like a senior data engineer: identify the stages of the pipeline (fetch, process, analyze,
-aggregate), estimate complexity, and break the work into independent chunks that can run in
-parallel.
+Rules:
+- Each task must be completely self-contained. The worker ONLY sees its own taskPrompt.
+- Each task must cover a distinct aspect so outputs combine into a complete answer.
+- taskPrompt must be a direct, complete instruction for K2 with all context embedded inline.
+- Never reference other tasks or leave placeholders — the worker has no other information.
+- If external data is involved (URLs, files), instruct the worker to reason from domain knowledge.
 
-Respond ONLY with valid JSON matching the requested schema.`;
+Respond ONLY with valid JSON:
+{
+  "jobTitle": "concise title under 60 chars",
+  "tasks": [
+    {
+      "title": "short task name",
+      "description": "one sentence: what concrete output this task produces",
+      "taskPrompt": "Complete standalone K2 prompt with all context inline. Demand specific output.",
+      "complexity": 1-5,
+      "estimatedSeconds": 2-15,
+      "dataLabel": "optional UI label"
+    }
+  ],
+  "resultSummaryHint": "what final synthesis should produce from all task outputs"
+}`;
 
 function toGraphDecomposition(input: LLMDecomposition): JobGraphDecomposition {
   return {
@@ -50,6 +67,7 @@ function toGraphDecomposition(input: LLMDecomposition): JobGraphDecomposition {
     tasks: input.tasks.map((task) => ({
       title: task.title,
       description: task.description,
+      taskPrompt: task.taskPrompt,
       complexity: task.complexity,
       estimatedSeconds: task.estimatedSeconds,
       dataLabel: task.dataLabel,
@@ -85,13 +103,26 @@ export function makeDecomposeNode(io: IO) {
       const chain = prompt.pipe(model).pipe(parser);
       const result = await chain.invoke({ command });
       if (result?.tasks?.length) {
-        return { decomposition: toGraphDecomposition(result) };
+        // Ensure every task has a real taskPrompt before accepting the decomposition
+        const allHavePrompts = result.tasks.every(
+          (t) => typeof t.taskPrompt === "string" && t.taskPrompt.trim().length > 20
+        );
+        if (allHavePrompts) {
+          console.log(`[graph:decompose] K2 produced ${result.tasks.length} tasks for "${result.jobTitle}"`);
+          return { decomposition: toGraphDecomposition(result) };
+        }
+        console.warn("[graph:decompose] K2 result missing taskPrompts, falling back to Claude");
       }
     } catch (error) {
-      console.warn("[graph:decompose] K2 parser path failed, falling back:", error);
+      console.warn("[graph:decompose] K2 decompose failed, falling back to Claude:", error);
     }
 
     const fallback = await decomposeWithLLM(command);
+    if (fallback) {
+      console.log(`[graph:decompose] Claude produced ${fallback.tasks.length} tasks for "${fallback.jobTitle}"`);
+    } else {
+      console.warn("[graph:decompose] No LLM decomposition available, will use heuristic fallback");
+    }
     return { decomposition: fallback ? toGraphDecomposition(fallback) : null };
   };
 }
@@ -130,23 +161,27 @@ export function makeScheduleNode(io: IO) {
           }).id
         );
       } else {
+        // Non-enterprise: always use llm-analysis so workers execute real K2 inference.
+        // Embed taskPrompt directly in payload so buildInferencePrompt uses it verbatim.
         taskIds = decomposition.tasks.map((task) =>
           createTask({
             jobId: ctx.jobId,
             title: task.title,
             description: task.description,
-            jobType: job.jobType,
+            jobType: "llm-analysis",
             status: "queued",
             progress: 0,
             inputPayload: {
-              batchSize: Math.floor(1000 + (task.complexity ?? 2) * 1500),
+              taskPrompt: task.taskPrompt ?? task.description,
+              originalCommand: command,
+              jobContext: decomposition.jobTitle,
               complexity: task.complexity ?? 2,
-              operationType: job.jobType,
               dataLabel: task.dataLabel ?? decomposition.jobTitle,
-              estimatedSeconds: task.estimatedSeconds,
-              seed: Math.floor(Math.random() * 100000),
             },
           }).id
+        );
+        console.log(
+          `[graph:schedule] Created ${taskIds.length} parallel K2 tasks for "${decomposition.jobTitle}"`
         );
       }
 
@@ -162,8 +197,10 @@ export function makeScheduleNode(io: IO) {
         }),
       });
     } else {
+      // Heuristic fallback: decomposer creates llm-analysis tasks with real prompts
       const tasks = decomposeJob(job);
       taskIds = tasks.map((task) => task.id);
+      console.log(`[graph:schedule] Heuristic fallback created ${taskIds.length} K2 tasks`);
     }
 
     updateJob(ctx.jobId, { status: "running", startedAt: Date.now() });

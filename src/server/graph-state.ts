@@ -9,6 +9,7 @@ export interface JobGraphContext {
 export interface JobGraphTaskSpec {
   title: string;
   description: string;
+  taskPrompt?: string;      // complete standalone K2 prompt; required for real execution
   complexity?: number;
   estimatedSeconds?: number;
   dataLabel?: string;

@@ -7,6 +7,7 @@ import { formatCarbonSaved } from "@/lib/carbon-metrics";
 interface MetricSnapshot {
   cpuPressure: number;
   memoryPoolGb: number;
+  memoryPressure: number;
   activeWorkers: number;
   carbonSavedGrams: number;
 }
@@ -146,6 +147,7 @@ export function GlobalMetricsPanel({
     Array.from({ length: HISTORY_LEN }, () => ({
       cpuPressure: 0,
       memoryPoolGb: 0,
+      memoryPressure: 0,
       activeWorkers: 0,
       carbonSavedGrams: 0,
     }))
@@ -164,13 +166,23 @@ export function GlobalMetricsPanel({
     const carbonSavedGrams =
       Math.round(totalTasksDone * (1.5 - schedulerBias) * 0.22 * 10) / 10;
 
+    // Pool: sum reported deviceMemoryGb; fall back to 4 GB per worker when the
+    // browser doesn't expose navigator.deviceMemory (Safari, Firefox, etc.).
+    // This ensures the total rises and falls as devices join or leave.
+    const memoryPoolGb = sumNumber(
+      activeWorkers.map((worker) => worker.telemetry?.deviceMemoryGb ?? 4)
+    );
+
+    // Pressure: percentage of active workers currently executing a task.
+    // Rises as tasks are dispatched, drops when workers finish and go idle.
+    const busyCount = activeWorkers.filter((w) => w.status === "working").length;
+    const memoryPressure =
+      activeWorkers.length > 0 ? Math.round((busyCount / activeWorkers.length) * 100) : 0;
+
     return {
       cpuPressure: avgNumber(activeWorkers.map((worker) => worker.metrics.busyRatio * 100)),
-      memoryPoolGb: sumNumber(
-        activeWorkers
-          .map((worker) => worker.telemetry?.deviceMemoryGb)
-          .filter((value): value is number => typeof value === "number")
-      ),
+      memoryPoolGb,
+      memoryPressure,
       activeWorkers: activeWorkers.length,
       carbonSavedGrams,
     };
@@ -189,9 +201,8 @@ export function GlobalMetricsPanel({
   }, [current]);
 
   const cpuHistory = history.map((snap) => snap.cpuPressure);
-  const memoryHistory = history.map((snap) => snap.memoryPoolGb);
+  const memPressureHistory = history.map((snap) => snap.memoryPressure);
   const carbonHistory = history.map((snap) => snap.carbonSavedGrams);
-  const maxMemoryPool = Math.max(...memoryHistory, current.memoryPoolGb, 1);
   const carbonBounds = Math.max(...carbonHistory.map((value) => Math.abs(value)), Math.abs(current.carbonSavedGrams), 1);
 
   return (
@@ -205,14 +216,15 @@ export function GlobalMetricsPanel({
         icon={<Cpu size={13} className="text-[#EF8354]" />}
       />
       <Sparkline
-        values={memoryHistory}
+        values={memPressureHistory}
         color="text-[#6f0600]"
         fillColor="#6f0600"
-        label="Memory Pool"
-        current={current.memoryPoolGb}
+        label="Memory Pressure"
+        current={current.memoryPressure}
         icon={<Database size={13} className="text-[#6f0600]" />}
-        unit=" GB"
-        maxValue={maxMemoryPool}
+        displayValue={`${current.memoryPressure}% · ${current.memoryPoolGb} GB`}
+        unit="%"
+        maxValue={100}
       />
       <Sparkline
         values={carbonHistory.map((value) => value + carbonBounds)}

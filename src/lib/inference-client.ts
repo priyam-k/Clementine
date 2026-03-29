@@ -39,15 +39,19 @@ function buildInferencePrompt(task: WireTask): string {
     ].join("\n\n");
   }
 
-  const payload = Object.entries(task.inputPayload)
-    .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
-    .join("\n");
+  // Use the pre-built taskPrompt when available — the decomposer wrote this as
+  // a complete, self-contained instruction. Use it verbatim so the worker
+  // answers exactly the sub-problem it was assigned.
+  if (typeof task.inputPayload.taskPrompt === "string" && task.inputPayload.taskPrompt.trim().length > 0) {
+    return task.inputPayload.taskPrompt;
+  }
 
+  // Fallback for tasks that pre-date taskPrompt
   return [
-    `Task title: ${task.title}`,
-    `Task description: ${task.description}`,
-    payload ? `Task payload:\n${payload}` : "",
-    "Return a concise useful result for this task.",
+    task.inputPayload.jobContext ? `Context: ${String(task.inputPayload.jobContext)}` : null,
+    `Task: ${task.title}`,
+    task.description,
+    "Provide a specific, concrete, useful result.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -74,7 +78,7 @@ export async function executeK2InferenceTask(task: WireTask): Promise<Record<str
                   "Do not fabricate external facts or real-world claims that are not present in the provided vendor fields.",
                   "Return only compact valid JSON.",
                 ].join(" ")
-              : "You are Clementine's inference worker. Execute the assigned task directly and return only the useful result.",
+              : "You are Clementine's distributed inference worker. Execute the assigned task completely and return a specific, concrete, useful result. Do not include preamble, do not re-state the prompt, do not reveal chain-of-thought. Just produce the output.",
         },
         {
           role: "user",

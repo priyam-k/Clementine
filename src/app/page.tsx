@@ -6,13 +6,35 @@ import Features from '@/components/landing/Features'
 
 export default function LandingPage() {
   return (
-    <div className="bg-[#FAF7F2]">
-      <Nav />
-      <Hero />
-      <Features />
+    <div className="relative overflow-hidden bg-[#FAF7F2]">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-0 w-1/2 opacity-35"
+        style={{
+          backgroundImage: `
+            radial-gradient(circle at top right, rgba(239,131,84,0.08), transparent 48%),
+            repeating-linear-gradient(
+              135deg,
+              rgba(18,11,9,0.035) 0px,
+              rgba(18,11,9,0.035) 1px,
+              transparent 1px,
+              transparent 18px
+            )
+          `,
+        }}
+      />
+
+      <section className="relative bg-[#F2E6DD] border-b border-[#120B09]/6">
+        <Nav />
+        <Hero />
+      </section>
+
+      <section className="relative">
+        <Features />
+      </section>
 
       {/* CTA banner */}
-      <section className="bg-[#EF8354] py-20 px-6 text-center">
+      <section className="relative bg-[#EF8354] py-20 px-6 text-center">
         <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter uppercase mb-4">
           Ready to Harvest?
         </h2>
@@ -36,7 +58,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-[#120B09] py-12 px-6">
+      <footer className="relative bg-[#120B09] py-12 px-6">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
           <div>
             <span className="text-2xl font-black text-white tracking-tighter uppercase italic">

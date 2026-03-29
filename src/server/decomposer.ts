@@ -173,99 +173,60 @@ export function deriveTitle(command: string, jobType: JobType): string {
   return title.length > 60 ? title.slice(0, 57) + "…" : title;
 }
 
-// ─── Mock Compute decomposition ───────────────────────────────────────────────
+// ─── Shared real-task builder ─────────────────────────────────────────────────
+// Used by all heuristic fallback paths. Each angle runs as a real K2 inference
+// call on a worker, so outputs are genuine and parallelism provides real speedup.
 
-const MOCK_TASK_TEMPLATES: Array<{
-  title: string;
-  description: string;
-  complexityRange: [number, number];
-}> = [
-  { title: "Data Ingestion & Sanitization", description: "Load and validate input dataset shards", complexityRange: [1, 2] },
-  { title: "Tokenization Pass", description: "Tokenize and normalize input vectors", complexityRange: [1, 2] },
-  { title: "Feature Extraction — Batch A", description: "Extract high-dimensional feature embeddings", complexityRange: [2, 4] },
-  { title: "Feature Extraction — Batch B", description: "Extract secondary feature embeddings", complexityRange: [2, 4] },
-  { title: "Parallel Processing Shard 1", description: "Process data shard 1 of N", complexityRange: [3, 5] },
-  { title: "Parallel Processing Shard 2", description: "Process data shard 2 of N", complexityRange: [3, 5] },
-  { title: "Parallel Processing Shard 3", description: "Process data shard 3 of N", complexityRange: [3, 5] },
-  { title: "Transformation Pipeline", description: "Apply transformation and normalization", complexityRange: [2, 3] },
-  { title: "Validation & Quality Check", description: "Verify output integrity and consistency", complexityRange: [1, 2] },
-  { title: "Result Aggregation", description: "Merge shard outputs into final artifact", complexityRange: [1, 2] },
+const ANALYSIS_ANGLES = [
+  {
+    title: "Core Research",
+    role: "researcher",
+    focus: "primary facts, key definitions, and the main scope of the request",
+  },
+  {
+    title: "In-Depth Analysis",
+    role: "analyst",
+    focus: "underlying mechanisms, patterns, and second-order implications",
+  },
+  {
+    title: "Comparative Evaluation",
+    role: "evaluator",
+    focus: "comparisons, trade-offs, and contrasting perspectives",
+  },
+  {
+    title: "Practical Recommendations",
+    role: "advisor",
+    focus: "concrete applications, actionable steps, and real-world examples",
+  },
 ];
 
-function decomposeMockCompute(job: ServerJob): ServerTask[] {
-  const lower = job.rawPrompt.toLowerCase();
-
-  // Determine task count based on apparent complexity
-  const complexWords = ["distributed", "neural", "parallel", "large", "batch", "heavy", "all", "full", "complete"];
-  const complexityScore = complexWords.filter((w) => lower.includes(w)).length;
-  const taskCount = Math.min(Math.max(4, 4 + complexityScore), MOCK_TASK_TEMPLATES.length);
-
-  const selectedTemplates = MOCK_TASK_TEMPLATES.slice(0, taskCount);
+function buildRealAnalysisTasks(job: ServerJob, angleCount = 4): ServerTask[] {
+  const command = job.normalizedCommand || job.rawPrompt;
+  const angles = ANALYSIS_ANGLES.slice(0, angleCount);
   const createdTasks: ServerTask[] = [];
 
-  for (const template of selectedTemplates) {
-    const [minC, maxC] = template.complexityRange;
-    const complexity = minC + Math.random() * (maxC - minC);
-    const batchSize = Math.floor(1000 + Math.random() * 9000);
-
+  for (const angle of angles) {
     const task = createTask({
       jobId: job.id,
-      title: template.title,
-      description: template.description,
-      jobType: "mock-compute",
-      status: "queued",
-      progress: 0,
-      inputPayload: {
-        batchSize,
-        complexity,
-        operationType: "mock-compute",
-        dataLabel: job.title,
-        seed: Math.floor(Math.random() * 100000),
-      },
-    });
-    createdTasks.push(task);
-  }
-
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
-  return createdTasks;
-}
-
-// ─── LLM Analysis decomposition ───────────────────────────────────────────────
-
-const LLM_TASK_TEMPLATES = [
-  { title: "Corpus Ingestion", description: "Load and chunk the input corpus" },
-  { title: "Semantic Embedding — Pass 1", description: "Generate embeddings for chunk batch 1" },
-  { title: "Semantic Embedding — Pass 2", description: "Generate embeddings for chunk batch 2" },
-  { title: "Similarity Clustering", description: "Cluster embedding vectors by semantic proximity" },
-  { title: "Key Theme Extraction", description: "Identify dominant themes across clusters" },
-  { title: "Summary Synthesis", description: "Synthesize final summary from theme clusters" },
-];
-
-function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
-  const createdTasks: ServerTask[] = [];
-  for (const template of LLM_TASK_TEMPLATES) {
-    const task = createTask({
-      jobId: job.id,
-      title: template.title,
-      description: template.description,
+      title: angle.title,
+      description: `${angle.title} — focusing on ${angle.focus}`,
       jobType: "llm-analysis",
       status: "queued",
       progress: 0,
       inputPayload: {
-        operationType: "llm-analysis",
-        batchSize: Math.floor(500 + Math.random() * 1500),
-        complexity: 3 + Math.random() * 2,
+        taskPrompt:
+          `You are an expert ${angle.role}. Address the following request, focusing specifically on ${angle.focus}:\n\n` +
+          `${command}\n\n` +
+          `Be specific and concrete. Your response will be combined with parallel analyses from other workers to produce a complete answer.`,
+        originalCommand: command,
+        jobContext: job.title,
         dataLabel: job.title,
-        seed: Math.floor(Math.random() * 100000),
+        complexity: 3,
       },
     });
     createdTasks.push(task);
   }
+
   updateJob(job.id, {
     taskIds: createdTasks.map((t) => t.id),
     totalTasks: createdTasks.length,
@@ -275,44 +236,16 @@ function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
   return createdTasks;
 }
 
-// ─── Batch Inference decomposition ────────────────────────────────────────────
+function decomposeMockCompute(job: ServerJob): ServerTask[] {
+  return buildRealAnalysisTasks(job, 3);
+}
 
-const INFERENCE_TASK_TEMPLATES = [
-  { title: "Data Pipeline Setup", description: "Initialize inference pipeline and load model weights" },
-  { title: "Batch Inference — Shard A", description: "Run inference on input shard A" },
-  { title: "Batch Inference — Shard B", description: "Run inference on input shard B" },
-  { title: "Batch Inference — Shard C", description: "Run inference on input shard C" },
-  { title: "Confidence Scoring", description: "Score and rank inference outputs" },
-  { title: "Result Consolidation", description: "Merge shard results and write output" },
-];
+function decomposeLlmAnalysis(job: ServerJob): ServerTask[] {
+  return buildRealAnalysisTasks(job, 4);
+}
 
 function decomposeBatchInference(job: ServerJob): ServerTask[] {
-  const createdTasks: ServerTask[] = [];
-  for (const template of INFERENCE_TASK_TEMPLATES) {
-    const task = createTask({
-      jobId: job.id,
-      title: template.title,
-      description: template.description,
-      jobType: "batch-inference",
-      status: "queued",
-      progress: 0,
-      inputPayload: {
-        operationType: "batch-inference",
-        batchSize: Math.floor(2000 + Math.random() * 8000),
-        complexity: 2 + Math.random() * 3,
-        dataLabel: job.title,
-        seed: Math.floor(Math.random() * 100000),
-      },
-    });
-    createdTasks.push(task);
-  }
-  updateJob(job.id, {
-    taskIds: createdTasks.map((t) => t.id),
-    totalTasks: createdTasks.length,
-    completedTasks: 0,
-    failedTasks: 0,
-  });
-  return createdTasks;
+  return buildRealAnalysisTasks(job, 4);
 }
 
 // ─── Blender Render decomposition ─────────────────────────────────────────────
