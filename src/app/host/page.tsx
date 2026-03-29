@@ -369,7 +369,7 @@ export default function HostPage() {
 
         {/* Worker grid */}
         <section className="mb-10">
-          <WorkerGrid workers={workers} joinUrl={session?.joinUrl} />
+          <WorkerGrid workers={workers} joinUrl={session?.joinUrl} session={compSession} />
         </section>
 
         {/* Task queue + Command history */}
