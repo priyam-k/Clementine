@@ -2,8 +2,9 @@
 
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowUpRight } from 'lucide-react'
+import { useState, useEffect } from 'react'
 
 // Must be called at module top-level inside a 'use client' component (Next.js 16 requirement)
 const ClusterOrb = dynamic(() => import('@/components/three/ClusterOrb'), {
@@ -11,13 +12,25 @@ const ClusterOrb = dynamic(() => import('@/components/three/ClusterOrb'), {
   loading: () => <div className="w-full h-full bg-[#EDE5D8]" />,
 })
 
-const HEADLINE = [
-  { text: 'THE',      className: 'text-[#120B09]' },
-  { text: 'HEIRLOOM', className: 'text-[#6f0600] italic' },
-  { text: 'NETWORK.', className: 'text-[#120B09]' },
-]
+const CYCLING_WORDS = ['NEXUS', 'RAPID', 'SECURE', 'POOLED']
+
+const textSize = 'text-[15vw] sm:text-[12vw] lg:text-[7.5rem] xl:text-[8.5rem]'
+const textBase = `block font-black tracking-tighter leading-[0.85] ${textSize}`
 
 export default function Hero() {
+  const [wordIndex, setWordIndex] = useState(0)
+
+  useEffect(() => {
+    // Wait for the initial headline animation to finish before cycling
+    const start = setTimeout(() => {
+      const id = setInterval(() => {
+        setWordIndex(i => (i + 1) % CYCLING_WORDS.length)
+      }, 2200)
+      return () => clearInterval(id)
+    }, 2000)
+    return () => clearTimeout(start)
+  }, [])
+
   return (
     <section className="relative bg-[#FAF7F2] min-h-[90vh] flex items-center overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 md:px-10 w-full py-20 lg:py-0 grid grid-cols-1 lg:grid-cols-[54%_46%] gap-8 lg:gap-6 items-center">
@@ -34,21 +47,46 @@ export default function Hero() {
           </motion.p>
 
           <div>
-            {HEADLINE.map(({ text, className }, i) => (
-              <motion.span
-                key={text}
-                initial={{ opacity: 0, y: 28 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: 0.65,
-                  delay: 0.25 + i * 0.15,
-                  ease: [0.25, 0.46, 0.45, 0.94],
-                }}
-                className={`block text-[15vw] sm:text-[12vw] lg:text-[7.5rem] xl:text-[8.5rem] font-black tracking-tighter leading-[0.85] ${className}`}
-              >
-                {text}
-              </motion.span>
-            ))}
+            {/* THE */}
+            <motion.span
+              initial={{ opacity: 0, y: 28 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.65, delay: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className={`${textBase} text-[#120B09]`}
+            >
+              THE
+            </motion.span>
+
+            {/* Cycling middle word */}
+            <motion.div
+              initial={{ opacity: 0, y: 28 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.65, delay: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="overflow-hidden"
+            >
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={wordIndex}
+                  initial={{ opacity: 0, x: -32 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 32 }}
+                  transition={{ duration: 0.32, ease: [0.25, 0.46, 0.45, 0.94] }}
+                  className={`${textBase} text-[#6f0600] italic`}
+                >
+                  {CYCLING_WORDS[wordIndex]}
+                </motion.span>
+              </AnimatePresence>
+            </motion.div>
+
+            {/* NETWORK. */}
+            <motion.span
+              initial={{ opacity: 0, y: 28 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.65, delay: 0.55, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className={`${textBase} text-[#120B09]`}
+            >
+              NETWORK.
+            </motion.span>
           </div>
 
           <motion.p

@@ -167,41 +167,39 @@ function JoinPageInner() {
 
         {/* Manual join form */}
         {showManualForm && (
-          <div className="bg-white border border-[#120B09]/5 rounded-sm p-5 shadow-sm">
+          <div className="bg-white border border-[#120B09]/5 rounded-sm px-5 pt-5 pb-7 shadow-sm">
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#4A3935]/50 font-[Inter,sans-serif] mb-3">
               Enter Session Code
             </p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                placeholder="CLMT-XXXX"
-                maxLength={9}
-                autoFocus
-                className="flex-1 bg-[#F5F1EE] border border-[#120B09]/8 rounded-sm px-4 py-3 text-center text-lg font-black text-[#120B09] tracking-[0.3em] placeholder-[#120B09]/20 focus:outline-none focus:border-[#EF8354]/50 font-[Inter,sans-serif] uppercase"
-              />
-              <button
-                onClick={handleJoin}
-                disabled={!joinCode.trim() || connectionState === "connecting"}
-                className={`px-4 py-3 rounded-sm font-black text-[10px] uppercase tracking-widest font-[Inter,sans-serif] transition-all flex items-center gap-2 ${
-                  connectionState === "connecting"
-                    ? "bg-[#EDE7E3] text-[#4A3935]/50 cursor-not-allowed"
-                    : joinCode.trim()
-                    ? "bg-[#EF8354] text-white hover:brightness-110 active:scale-95"
-                    : "bg-[#EDE7E3] text-[#4A3935]/40 cursor-not-allowed"
-                }`}
-              >
-                {connectionState === "connecting" ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Wifi size={14} />
-                )}
-                {connectionState === "connecting" ? "" : "Join"}
-              </button>
-            </div>
-            <p className="mt-2 text-[9px] text-[#4A3935]/40 text-center font-[Inter,sans-serif]">
+            <input
+              type="text"
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+              placeholder="CLMT-XXXX"
+              maxLength={9}
+              autoFocus
+              className="w-full bg-[#F5F1EE] border border-[#120B09]/8 rounded-sm px-4 py-3 text-center text-lg font-black text-[#120B09] tracking-[0.3em] placeholder-[#120B09]/20 focus:outline-none focus:border-[#EF8354]/50 font-[Inter,sans-serif] uppercase mb-3"
+            />
+            <button
+              onClick={handleJoin}
+              disabled={!joinCode.trim() || connectionState === "connecting"}
+              className={`w-full py-3 rounded-sm font-black text-[10px] uppercase tracking-widest font-[Inter,sans-serif] transition-all flex items-center justify-center gap-2 ${
+                connectionState === "connecting"
+                  ? "bg-[#EDE7E3] text-[#4A3935]/50 cursor-not-allowed"
+                  : joinCode.trim()
+                  ? "bg-[#EF8354] text-white hover:brightness-110 active:scale-95"
+                  : "bg-[#EDE7E3] text-[#4A3935]/40 cursor-not-allowed"
+              }`}
+            >
+              {connectionState === "connecting" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Wifi size={14} />
+              )}
+              {connectionState === "connecting" ? "" : "Join"}
+            </button>
+            <p className="mt-3 text-[9px] text-[#4A3935]/40 text-center font-[Inter,sans-serif]">
               Or scan the QR code on the host dashboard to join instantly
             </p>
           </div>
