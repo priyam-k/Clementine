@@ -851,19 +851,19 @@ export default function Features() {
               transition={{ duration: 0.38, ease: [0.25, 0.46, 0.45, 0.94] }}
             >
               <div className="flex items-start gap-4 mb-6">
-                <span className="text-[80px] leading-none font-black italic text-[#EF8354]/20 select-none mt-2 shrink-0">
+                <span className="text-[100px] leading-none font-black italic text-[#EF8354]/20 select-none mt-2 shrink-0">
                   {STEPS[activeStep].num}
                 </span>
                 <div>
-                  <p className="text-[9px] font-black uppercase tracking-[0.25em] text-[#EF8354]/65 mb-2">
+                  <p className="text-[11px] font-black uppercase tracking-[0.25em] text-[#EF8354]/65 mb-2">
                     {STEPS[activeStep].tag}
                   </p>
-                  <h2 className="text-4xl xl:text-5xl font-black text-white tracking-tighter uppercase leading-[0.88] whitespace-pre-line">
+                  <h2 className="text-5xl xl:text-6xl font-black text-white tracking-tighter uppercase leading-[0.88] whitespace-pre-line">
                     {STEPS[activeStep].title}
                   </h2>
                 </div>
               </div>
-              <p className="text-white/45 text-sm leading-relaxed font-medium max-w-[280px]">
+              <p className="text-white/45 text-base leading-relaxed font-medium max-w-[320px]">
                 {STEPS[activeStep].body}
               </p>
             </motion.div>
