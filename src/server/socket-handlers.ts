@@ -28,6 +28,7 @@ import {
   createTask,
   releaseJobTasks,
   removeWorker,
+  updateHostSocket,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -115,10 +116,11 @@ export function setupSocketHandlers(io: IO, port: number) {
       } else {
         // Update host socket (re-connect case)
         session.hostSocketId = socket.id;
+        updateHostSocket(session.code, socket.id);
         console.log(`[host] Re-registered for session: ${session.code}`);
       }
 
-      // Auto-register the host browser as a worker node
+      // Auto-register the host browser as a worker node (only if none exists yet)
       const existingHostWorker = getWorkersForSession(session.code).find(w => w.isHost);
       if (!existingHostWorker) {
         registerWorker(socket.id, {

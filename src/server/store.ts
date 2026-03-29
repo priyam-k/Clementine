@@ -59,6 +59,24 @@ export function getHostSocketForSession(code: string): string | undefined {
   return sessionToHost.get(code);
 }
 
+export function updateHostSocket(code: string, newSocketId: string): void {
+  sessionToHost.set(code, newSocketId);
+  // Re-wire socketToWorker so the host worker is reachable by the new socket
+  const hostWorker = Array.from(workers.values()).find(
+    (w) => w.sessionCode === code && w.isHost
+  );
+  if (hostWorker) {
+    // Remove old socket mapping (don't know old socket id, clean up any stale entry)
+    for (const [sid, wid] of socketToWorker) {
+      if (wid === hostWorker.id) socketToWorker.delete(sid);
+    }
+    socketToWorker.set(newSocketId, hostWorker.id);
+    hostWorker.socketId = newSocketId;
+    hostWorker.status = "idle";
+    workers.set(hostWorker.id, hostWorker);
+  }
+}
+
 // ─── Worker ops ──────────────────────────────────────────────────────────────
 
 export function registerWorker(socketId: string, data: {
