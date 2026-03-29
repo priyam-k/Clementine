@@ -2,6 +2,7 @@
 import { CheckCircle2, Download, Clock, Users } from "lucide-react";
 import type { Job } from "@/lib/types";
 import { formatDuration } from "@/lib/mock-data";
+import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
 interface ResultPanelProps {
   job: Job;
@@ -38,7 +39,11 @@ export function ResultPanel({ job }: ResultPanelProps) {
         {[
           { icon: Clock, label: "Duration", value: formatDuration(result.durationMs) },
           { icon: Users, label: "Workers", value: String(result.workerCount) },
-          { icon: CheckCircle2, label: "Processed", value: result.dataProcessed },
+          {
+            icon: CheckCircle2,
+            label: "Net Carbon Saved",
+            value: formatCarbonSaved(result.estimatedCarbonSavedGrams ?? job.estimatedCarbonSavedGrams ?? 0),
+          },
         ].map(({ icon: Icon, label, value }) => (
           <div key={label} className="bg-white/5 rounded-sm px-3 py-2 text-center">
             <Icon size={11} className="mx-auto text-[#EF8354] mb-1" />

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Wifi, WifiOff, Loader2 } from "lucide-react";
+import { Wifi, WifiOff, Loader2, Leaf } from "lucide-react";
 import type { WorkerStatus } from "@/lib/types";
 
 type ConnectionState = "disconnected" | "connecting" | "connected";
@@ -11,6 +11,8 @@ interface WorkerStatusCardProps {
   sessionCode: string;
   connectionState: ConnectionState;
   workerStatus: WorkerStatus;
+  carbonIntensity?: number;
+  emissionsRating: string;
 }
 
 export function WorkerStatusCard({
@@ -19,6 +21,8 @@ export function WorkerStatusCard({
   sessionCode,
   connectionState,
   workerStatus,
+  carbonIntensity,
+  emissionsRating,
 }: WorkerStatusCardProps) {
   const connectionLabel: Record<ConnectionState, string> = {
     disconnected: "Disconnected",
@@ -86,6 +90,28 @@ export function WorkerStatusCard({
         >
           {workerStatus === "working" ? "⟳ Working" : workerStatus === "done" ? "✓ Done" : workerStatus === "idle" ? "● Idle" : "Offline"}
         </span>
+      </div>
+
+      <div className="mt-5 bg-white/70 border border-[#120B09]/5 rounded-sm px-4 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Leaf size={13} className="text-green-700" />
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+              Grid Emissions
+            </p>
+            <p className="text-xs font-medium text-[#4A3935]/70">
+              Electricity Maps live carbon intensity
+            </p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-black text-[#120B09]">
+            {typeof carbonIntensity === "number" ? `${Math.round(carbonIntensity)} gCO2e/kWh` : "Unavailable"}
+          </p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif]">
+            {emissionsRating}
+          </p>
+        </div>
       </div>
     </div>
   );
