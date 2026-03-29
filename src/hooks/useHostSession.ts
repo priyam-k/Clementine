@@ -13,6 +13,7 @@ import type {
 } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
+import { executeK2InferenceTask } from "@/lib/inference-client";
 
 // ─── Public state shape ───────────────────────────────────────────────────────
 
@@ -28,6 +29,8 @@ export interface HostSessionState {
   reconnect: () => void;
 }
 
+const HOST_SESSION_STORAGE_KEY = "clementine:host-session-code";
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useHostSession(): HostSessionState {
@@ -42,7 +45,11 @@ export function useHostSession(): HostSessionState {
   const [latestResult, setLatestResult] = useState<WireResult | null>(null);
 
   // Persist session code across reconnects
-  const sessionCodeRef = useRef<string | undefined>(undefined);
+  const sessionCodeRef = useRef<string | undefined>(
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(HOST_SESSION_STORAGE_KEY) ?? undefined
+      : undefined
+  );
   // Prevent double-executing assigned tasks (Strict Mode)
   const executingTaskRef = useRef<string | null>(null);
   const hostProfileSentRef = useRef<string | null>(null);
@@ -63,6 +70,11 @@ export function useHostSession(): HostSessionState {
         });
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
+      } else if (task.jobType === "batch-inference" || task.jobType === "llm-analysis") {
+        socket.emit("task:progress", { taskId: task.id, progress: 15 });
+        const output = await executeK2InferenceTask(task);
+        socket.emit("task:progress", { taskId: task.id, progress: 100 });
+        socket.emit("task:complete", { taskId: task.id, output });
       } else {
         // Mock compute for other job types
         const complexity = typeof task.inputPayload.complexity === "number" ? task.inputPayload.complexity : 2;
@@ -107,6 +119,9 @@ export function useHostSession(): HostSessionState {
     // Initial state snapshot
     socket.on("session:state", ({ session: sess, workers: ws, jobs: js }) => {
       sessionCodeRef.current = sess.code;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(HOST_SESSION_STORAGE_KEY, sess.code);
+      }
       setSession(sess);
       setWorkers(ws);
       setJobs(js);

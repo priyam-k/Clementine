@@ -7,7 +7,7 @@ import { JobStatusBadge, TaskStatusBadge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import {
   ArrowLeft, CheckCircle2, Clock, RefreshCw, XCircle,
-  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle,
+  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download,
 } from "lucide-react";
 import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
 
@@ -139,7 +139,11 @@ function JobCard({ job }: { job: WireJob }) {
                   <TaskStatusBadge status={task.status} />
                 </div>
                 <div className="col-span-2">
-                  {task.assignedWorkerId ? (
+                  {task.completedByWorkerName ? (
+                    <span className="text-[9px] font-black text-green-700 font-[Inter,sans-serif]">
+                      {task.completedByWorkerName}
+                    </span>
+                  ) : task.assignedWorkerId ? (
                     <span className="text-[9px] font-black text-[#EF8354] font-[Inter,sans-serif] uppercase">
                       assigned
                     </span>
@@ -175,9 +179,10 @@ function JobCard({ job }: { job: WireJob }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
-  const { jobs, submitJob, isConnected } = useHostSession();
+  const { jobs, submitJob, isConnected, session } = useHostSession();
   const [command, setCommand] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "completed" | "queued">("all");
+  const [isDumping, setIsDumping] = useState(false);
 
   const allTasks = useMemo(() => jobs.flatMap((j) => j.tasks), [jobs]);
   const completedJobs = useMemo(() => jobs.filter((j) => j.status === "completed"), [jobs]);
@@ -209,6 +214,32 @@ export default function TasksPage() {
     setCommand("");
   };
 
+  const handleDumpSession = async () => {
+    if (!session?.code || isDumping) return;
+    setIsDumping(true);
+
+    try {
+      const response = await fetch(`/api/session-dump/${session.code}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to export session dump");
+      }
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${session.code}-mongo-dump.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("[tasks] session dump failed", error);
+    } finally {
+      setIsDumping(false);
+    }
+  };
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -227,6 +258,14 @@ export default function TasksPage() {
                 {jobs.length} job{jobs.length !== 1 ? "s" : ""} · {allTasks.length} subtasks
               </p>
             </div>
+            <button
+              onClick={handleDumpSession}
+              disabled={!session?.code || isDumping}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-[#120B09]/8 text-[#120B09] font-black text-[10px] uppercase tracking-widest rounded-sm hover:border-[#EF8354]/30 hover:text-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+            >
+              <Download size={12} />
+              {isDumping ? "Exporting…" : "Dump Session DB"}
+            </button>
           </div>
         </header>
 
