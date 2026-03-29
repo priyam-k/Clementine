@@ -5,12 +5,15 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { useHostSession } from "@/hooks/useHostSession";
 import { JobStatusBadge, TaskStatusBadge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { MarkdownArtifactView } from "@/components/host/MarkdownArtifactView";
 import {
   ArrowLeft, CheckCircle2, Clock, RefreshCw, XCircle,
-  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download,
+  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download, ScanSearch,
 } from "lucide-react";
 import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
 import { formatCarbonSaved, getJobCarbonSavedGrams, getTaskCarbonSavedGrams } from "@/lib/carbon-metrics";
+import { TaskInspectOverlay } from "@/components/host/TaskInspectOverlay";
+import { formatInputPayload, formatOutputPayload, formatDuration } from "@/app/host/tasks/task-helpers";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -20,6 +23,7 @@ const JOB_TYPE_META: Record<JobType, { label: string; color: string; bg: string 
   "batch-inference": { label: "Inference", color: "text-blue-700", bg: "bg-blue-500" },
   "blender-render": { label: "Render", color: "text-green-700", bg: "bg-green-500" },
   "fractal-render": { label: "Fractal", color: "text-[#6f0600]", bg: "bg-[#6f0600]" },
+  "enterprise-analysis": { label: "Enterprise", color: "text-sky-700", bg: "bg-sky-500" },
 };
 
 function jobProgress(job: WireJob): number {
@@ -27,13 +31,6 @@ function jobProgress(job: WireJob): number {
   return Math.round((job.completedTasks / job.totalTasks) * 100);
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
 
 function avgTaskDuration(jobs: WireJob[]): number | null {
   const durations: number[] = [];
@@ -66,7 +63,17 @@ function TaskIcon({ status }: { status: WireTask["status"] }) {
   return <Clock size={13} className="text-[#4A3935]/30 flex-shrink-0" />;
 }
 
-function JobCard({ job }: { job: WireJob }) {
+function JobCard({
+  job,
+  expandedTaskId,
+  onExpandTask,
+  onInspect,
+}: {
+  job: WireJob;
+  expandedTaskId: string | null;
+  onExpandTask: (id: string | null) => void;
+  onInspect: (jobId: string) => void;
+}) {
   const [open, setOpen] = useState(job.status === "running");
   const meta = JOB_TYPE_META[job.jobType];
   const pct = jobProgress(job);
@@ -74,59 +81,83 @@ function JobCard({ job }: { job: WireJob }) {
   const failedCount = job.failedTasks;
   const duration = job.completedAt && job.startedAt ? job.completedAt - job.startedAt : null;
   const carbonSaved = getJobCarbonSavedGrams(job);
+  const markdownArtifact =
+    job.artifacts.find((artifact) => artifact.artifactType === "markdown") ?? null;
   const contributions = [...job.workerContributions].sort(
     (a, b) => b.tasksCompleted - a.tasksCompleted || b.totalDurationMs - a.totalDurationMs
   );
 
+  const handleDownloadArtifact = () => {
+    if (!markdownArtifact || typeof window === "undefined") return;
+    const blob = new Blob([markdownArtifact.content], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = markdownArtifact.filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className={`border rounded-sm transition-all ${job.status === "running" ? "border-[#EF8354]/30" : "border-[#120B09]/5"} bg-white`}>
       {/* Header row */}
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-start gap-4 px-5 py-4 text-left hover:bg-[#FAFAF8] transition-all rounded-sm"
-      >
-        {/* Job type chip */}
-        <span className={`mt-0.5 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest rounded-sm font-[Inter,sans-serif] flex-shrink-0 ${meta.color} bg-current/10`} style={{ backgroundColor: meta.bg + "18" }}>
-          {meta.label}
-        </span>
+      <div className="flex items-start">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex-1 flex items-start gap-4 px-5 py-4 text-left hover:bg-[#FAFAF8] transition-all rounded-sm min-w-0"
+        >
+          {/* Job type chip */}
+          <span className={`mt-0.5 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest rounded-sm font-[Inter,sans-serif] flex-shrink-0 ${meta.color} bg-current/10`} style={{ backgroundColor: meta.bg + "18" }}>
+            {meta.label}
+          </span>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className="font-black text-sm text-[#120B09] tracking-tight leading-tight">{job.title}</span>
-            <JobStatusBadge status={
-              job.status === "decomposing" || job.status === "reducing" ? "running" :
-              job.status === "running" ? "running" :
-              job.status === "completed" ? "completed" :
-              job.status === "failed" ? "failed" : "queued"
-            } />
-          </div>
-          <p className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif] truncate italic mb-2">
-            &ldquo;{job.rawPrompt}&rdquo;
-          </p>
-          {job.totalTasks > 0 && (
-            <div className="flex items-center gap-3">
-              <ProgressBar value={pct} height="sm" />
-              <span className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif] flex-shrink-0">{pct}%</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <span className="font-black text-sm text-[#120B09] tracking-tight leading-tight">{job.title}</span>
+              <JobStatusBadge status={
+                job.status === "decomposing" || job.status === "reducing" ? "running" :
+                job.status === "running" ? "running" :
+                job.status === "completed" ? "completed" :
+                job.status === "failed" ? "failed" : "queued"
+              } />
             </div>
-          )}
-          <div className="flex items-center gap-4 mt-1.5">
-            <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">
-              {completedCount}/{job.totalTasks} tasks
-            </span>
-            <span className="text-[9px] text-green-700 font-black font-[Inter,sans-serif]">
-              {formatCarbonSaved(carbonSaved)} saved
-            </span>
-            {failedCount > 0 && (
-              <span className="text-[9px] text-[#BA1A1A] font-black font-[Inter,sans-serif]">{failedCount} failed</span>
+            <p className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif] truncate italic mb-2">
+              &ldquo;{job.rawPrompt}&rdquo;
+            </p>
+            {job.totalTasks > 0 && (
+              <div className="flex items-center gap-3">
+                <ProgressBar value={pct} height="sm" />
+                <span className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif] flex-shrink-0">{pct}%</span>
+              </div>
             )}
-            {duration && (
-              <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">⏱ {formatDuration(duration)}</span>
-            )}
+            <div className="flex items-center gap-4 mt-1.5">
+              <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">
+                {completedCount}/{job.totalTasks} tasks
+              </span>
+              <span className="text-[9px] text-green-700 font-black font-[Inter,sans-serif]">
+                {formatCarbonSaved(carbonSaved)} saved
+              </span>
+              {failedCount > 0 && (
+                <span className="text-[9px] text-[#BA1A1A] font-black font-[Inter,sans-serif]">{failedCount} failed</span>
+              )}
+              {duration && (
+                <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">⏱ {formatDuration(duration)}</span>
+              )}
+            </div>
           </div>
-        </div>
 
-        <ChevronDown size={14} className={`flex-shrink-0 text-[#4A3935]/30 mt-1 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+          <ChevronDown size={14} className={`flex-shrink-0 text-[#4A3935]/30 mt-1 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onInspect(job.id); }}
+          className="self-center mr-3 p-1.5 rounded-sm text-[#4A3935]/25 hover:text-[#EF8354] hover:bg-[#EF8354]/10 transition-all flex-shrink-0"
+          title="See job process"
+        >
+          <ScanSearch size={13} />
+        </button>
+      </div>
 
       {/* Contribution list */}
       {open && (
@@ -168,30 +199,96 @@ function JobCard({ job }: { job: WireJob }) {
             job.tasks.map((task) => {
               const dur = task.completedAt && task.startedAt ? task.completedAt - task.startedAt : null;
               const taskCarbonSaved = getTaskCarbonSavedGrams(task);
+              const isExpanded = expandedTaskId === task.id;
+              const inputRows = formatInputPayload(task.jobType, task.inputPayload);
+              const outputRows = formatOutputPayload(task.jobType, task.outputPayload, task.progress, task.status);
               return (
-                <div key={task.id} className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all">
-                  <div className="col-span-3 flex items-center gap-2">
-                    <TaskIcon status={task.status} />
-                    <span className="text-xs font-medium text-[#120B09] truncate">{task.title}</span>
+                <div key={task.id}>
+                  <div
+                    onClick={() => onExpandTask(isExpanded ? null : task.id)}
+                    className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all cursor-pointer select-none"
+                  >
+                    <div className="col-span-3 flex items-center gap-2">
+                      <TaskIcon status={task.status} />
+                      <span className="text-xs font-medium text-[#120B09] truncate">{task.title}</span>
+                      <ChevronDown size={10} className={`flex-shrink-0 text-[#4A3935]/30 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                    </div>
+                    <div className="col-span-2">
+                      <TaskStatusBadge status={task.status} />
+                    </div>
+                    <div className="col-span-2">
+                      <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                        {dur ? formatDuration(dur) : "—"}
+                      </span>
+                    </div>
+                    <div className="col-span-3">
+                      <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                        {task.completedByWorkerName ?? task.assignedWorkerId ?? "—"}
+                      </span>
+                    </div>
+                    <div className="col-span-2 text-right">
+                      <span className={`text-[10px] font-black font-[Inter,sans-serif] ${taskCarbonSaved >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
+                        {formatCarbonSaved(taskCarbonSaved)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="col-span-2">
-                    <TaskStatusBadge status={task.status} />
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
-                      {dur ? formatDuration(dur) : "—"}
-                    </span>
-                  </div>
-                  <div className="col-span-3">
-                    <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
-                      {task.completedByWorkerName ?? task.assignedWorkerId ?? "—"}
-                    </span>
-                  </div>
-                  <div className="col-span-2 text-right">
-                    <span className={`text-[10px] font-black font-[Inter,sans-serif] ${taskCarbonSaved >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
-                      {formatCarbonSaved(taskCarbonSaved)}
-                    </span>
-                  </div>
+                  {isExpanded && (
+                    <div className="border-t border-[#EF8354]/10 bg-[#FAFAF8] px-5 py-4">
+                      {task.description && (
+                        <p className="text-xs text-[#4A3935]/60 italic mb-4">{task.description}</p>
+                      )}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        {/* Input */}
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 mb-2">Input</p>
+                          <div className="space-y-1">
+                            {inputRows.map(({ label, value }) => (
+                              <div key={label} className="flex gap-2">
+                                <span className="text-[9px] font-black uppercase tracking-wider text-[#4A3935]/40 w-24 flex-shrink-0">{label}</span>
+                                <span className="text-[10px] text-[#120B09] font-medium">{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Output */}
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 mb-2">Output</p>
+                          {outputRows === "in-progress" ? (
+                            <div>
+                              <ProgressBar value={task.progress} height="sm" animated />
+                              <p className="text-[10px] text-[#EF8354] font-black mt-1">{task.progress}% complete</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              {outputRows.map(({ label, value }) => (
+                                <div key={label} className="flex gap-2">
+                                  <span className="text-[9px] font-black uppercase tracking-wider text-[#4A3935]/40 w-24 flex-shrink-0">{label}</span>
+                                  <span className="text-[10px] text-[#120B09] font-medium">{value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {/* Worker row */}
+                      {(task.completedByWorkerName ?? task.assignedWorkerId) && (
+                        <div className="mt-3 pt-3 border-t border-[#120B09]/5 flex items-center gap-4 flex-wrap">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40">Worker</span>
+                          <span className="text-[10px] font-black text-[#120B09]">
+                            {task.completedByWorkerName ?? task.assignedWorkerId}
+                          </span>
+                          {dur && (
+                            <span className="text-[10px] text-[#4A3935]/50">{formatDuration(dur)}</span>
+                          )}
+                          {taskCarbonSaved !== 0 && (
+                            <span className={`text-[10px] font-black ${taskCarbonSaved >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
+                              {formatCarbonSaved(taskCarbonSaved)} carbon
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })
@@ -206,15 +303,38 @@ function JobCard({ job }: { job: WireJob }) {
       {/* Result panel for completed jobs */}
       {job.status === "completed" && job.result && (
         <div className="border-t border-[#120B09]/5 px-5 py-4 bg-[#FAFAF8]">
-          <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">Result</p>
-          <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
-          <p className="text-[10px] font-black text-green-700 font-[Inter,sans-serif] mt-2">
-            Net carbon saved: {formatCarbonSaved(
-              typeof job.result.metrics.netCarbonSavedGrams === "number"
-                ? job.result.metrics.netCarbonSavedGrams
-                : carbonSaved
-            )}
-          </p>
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">
+                Result
+              </p>
+              <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
+            </div>
+            <button
+              onClick={handleDownloadArtifact}
+              disabled={!markdownArtifact}
+              className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-[#120B09]/8 text-[#120B09] font-black text-[9px] uppercase tracking-widest rounded-sm hover:border-[#EF8354]/30 hover:text-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+            >
+              <Download size={11} />
+              Export MD
+            </button>
+          </div>
+          {markdownArtifact ? (
+            <div className="rounded-sm bg-[#120B09] p-4 max-h-80 overflow-y-auto custom-scrollbar">
+              <MarkdownArtifactView content={markdownArtifact.content} />
+            </div>
+          ) : (
+            <div className="rounded-sm bg-white border border-[#120B09]/8 p-3">
+              {job.result.outputLines.slice(0, 8).map((line, index) => (
+                <p
+                  key={`${job.id}-result-line-${index}`}
+                  className="text-[10px] text-[#4A3935]/70 font-[Inter,sans-serif] leading-relaxed"
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -224,10 +344,15 @@ function JobCard({ job }: { job: WireJob }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
-  const { jobs, submitJob, isConnected, session } = useHostSession();
+  const { jobs, workers, submitJob, isConnected, session } = useHostSession();
   const [command, setCommand] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "completed" | "queued">("all");
   const [isDumping, setIsDumping] = useState(false);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [inspectingJobId, setInspectingJobId] = useState<string | null>(null);
+  const liveInspectingJob = inspectingJobId
+    ? (jobs.find((j) => j.id === inspectingJobId) ?? null)
+    : null;
 
   const activeTasks = useMemo(() => jobs.flatMap((job) => job.tasks), [jobs]);
   const allTasks = useMemo(() => jobs.reduce((sum, job) => sum + job.totalTasks, 0), [jobs]);
@@ -308,7 +433,10 @@ export default function TasksPage() {
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar
+        workerCountLabel={`${workers.filter((worker) => worker.status !== "offline").length}/${workers.length || 0}`}
+        taskCountLabel={`${runningJobs.length}/${jobs.length || 0}`}
+      />
       <main className="md:ml-64 flex-1 p-6 md:p-10 lg:p-14">
         {/* Header */}
         <header className="mb-10">
@@ -503,11 +631,25 @@ export default function TasksPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filtered.map((job) => <JobCard key={job.id} job={job} />)}
+              {filtered.map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  expandedTaskId={expandedTaskId}
+                  onExpandTask={setExpandedTaskId}
+                  onInspect={setInspectingJobId}
+                />
+              ))}
             </div>
           )}
         </section>
       </main>
+      {liveInspectingJob && (
+        <TaskInspectOverlay
+          job={liveInspectingJob}
+          onClose={() => setInspectingJobId(null)}
+        />
+      )}
     </div>
   );
 }

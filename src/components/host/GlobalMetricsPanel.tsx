@@ -183,18 +183,6 @@ export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; j
   const carbonBounds = Math.max(...carbonHistory.map((value) => Math.abs(value)), Math.abs(current.carbonSavedGrams), 1);
 
   return (
-    <section className="mb-10">
-      <div className="flex items-end justify-between mb-4">
-        <div>
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#EF8354] font-[Inter,sans-serif] block mb-1">
-            Fleet Telemetry
-          </span>
-          <h2 className="text-2xl font-black text-[#120B09] tracking-tighter uppercase">
-            Global Metrics
-          </h2>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <Sparkline
           values={cpuHistory}
@@ -240,6 +228,5 @@ export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; j
           icon={<Users size={13} className="text-[#6f0600]" />}
         />
       </div>
-    </section>
   );
 }

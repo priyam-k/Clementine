@@ -3,8 +3,7 @@ import { useMemo, useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { SessionCard } from "@/components/host/SessionCard";
 import { QRCard } from "@/components/host/QRCard";
-import { VoiceCommandCard } from "@/components/host/VoiceCommandCard";
-import { JobComposer } from "@/components/host/JobComposer";
+import { CommandDispatchCard } from "@/components/host/CommandDispatchCard";
 import { WorkerGrid } from "@/components/host/WorkerGrid";
 import { TaskQueuePanel } from "@/components/host/TaskQueuePanel";
 import { ProgressSummaryCard } from "@/components/host/ProgressSummaryCard";
@@ -15,8 +14,13 @@ import { GlobalMetricsPanel } from "@/components/host/GlobalMetricsPanel";
 import { useHostSession } from "@/hooks/useHostSession";
 import type { Job, Session, CommandEntry } from "@/lib/types";
 import type { WireJob, WireSession, FractalJobConfig } from "@/lib/shared-types";
-import { Users, WifiOff, Loader2, Layers, Leaf, Rocket } from "lucide-react";
-import { formatCarbonSaved, getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
+import { WifiOff, Loader2, Layers, Rocket, ChevronDown, ChevronUp } from "lucide-react";
+import { getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
+import {
+  buildEnterpriseBenchmarkCommand,
+  getEnterpriseBenchmarkConfig,
+  getEnterpriseDifficultyLabel,
+} from "@/lib/enterprise-benchmark";
 
 // Build fractal config from a difficulty value (1-100, log-linear scale)
 // Difficulty 1  → 600×400 px, 128 iter  ≈ 5–15 s  (1 worker)
@@ -73,6 +77,7 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
     startedAt: j.startedAt ? new Date(j.startedAt).toISOString() : undefined,
     completedAt: j.completedAt ? new Date(j.completedAt).toISOString() : undefined,
     estimatedCarbonSavedGrams: getJobCarbonSavedGrams(j),
+    artifacts: j.artifacts,
     subtasks: j.tasks.map((t) => ({
       id: t.id,
       label: t.title,
@@ -121,6 +126,7 @@ export default function HostPage() {
     fractalTiles,
     submitJob,
     submitFractalJob,
+    submitEnterpriseBenchmark,
     schedulerBias,
     setSchedulerBias,
     reconnect,
@@ -128,7 +134,17 @@ export default function HostPage() {
     useHostSession();
 
   const [difficulty, setDifficulty] = useState(40);
+  const [showFractalResults, setShowFractalResults] = useState(true);
+  const [showEnterpriseResults, setShowEnterpriseResults] = useState(true);
   const fractalConfig = useMemo(() => buildFractalConfig(difficulty), [difficulty]);
+  const enterpriseBenchmarkConfig = useMemo(
+    () => getEnterpriseBenchmarkConfig(difficulty),
+    [difficulty]
+  );
+  const enterpriseBenchmarkCommand = useMemo(
+    () => buildEnterpriseBenchmarkCommand(enterpriseBenchmarkConfig),
+    [enterpriseBenchmarkConfig]
+  );
 
   // Adapt wire types to component prop shapes
   const sortedJobs = useMemo(
@@ -153,14 +169,52 @@ export default function HostPage() {
 
   // Derive stat card data from live state
   const activeWorkers = workers.filter((w) => w.status !== "offline");
-  const runningJobs = compJobs.filter((j) => j.status === "running");
-  const totalCarbonSavedGrams = useMemo(
-    () => sortedJobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
-    [sortedJobs]
+  const workersWithCarbon = activeWorkers.filter((worker) => typeof worker.carbonIntensity === "number");
+  const averageCarbonIntensity = useMemo(
+    () =>
+      workersWithCarbon.length > 0
+        ? Math.round(
+            workersWithCarbon.reduce((sum, worker) => sum + (worker.carbonIntensity ?? 0), 0) /
+              workersWithCarbon.length
+          )
+        : null,
+    [workersWithCarbon]
   );
-
-  const activeJob = runningJobs.filter((j) => j.id !== jobs.find(j2 => j2.jobType === "fractal-render")?.id)[0] ?? null;
-  const lastCompletedJob = compJobs.find((j) => j.status === "completed" && jobs.find(j2 => j2.id === j.id)?.jobType !== "fractal-render") ?? null;
+  const cleanestWorker = useMemo(
+    () =>
+      workersWithCarbon.length > 0
+        ? [...workersWithCarbon].sort(
+            (a, b) => (a.carbonIntensity ?? Number.POSITIVE_INFINITY) - (b.carbonIntensity ?? Number.POSITIVE_INFINITY)
+          )[0]
+        : null,
+    [workersWithCarbon]
+  );
+  const fastestWorker = useMemo(
+    () =>
+      activeWorkers
+        .filter((worker) => typeof worker.benchmark?.normalizedScore === "number")
+        .sort(
+          (a, b) => (b.benchmark?.normalizedScore ?? 0) - (a.benchmark?.normalizedScore ?? 0)
+        )[0] ?? null,
+    [activeWorkers]
+  );
+  const runningJobs = compJobs.filter((j) => j.status === "running");
+  const activeJob =
+    runningJobs.filter((j) => j.id !== jobs.find((j2) => j2.jobType === "fractal-render")?.id)[0] ??
+    null;
+  const latestEnterpriseJob =
+    compJobs.find(
+      (j) =>
+        j.status === "completed" &&
+        jobs.find((j2) => j2.id === j.id)?.jobType === "enterprise-analysis"
+    ) ?? null;
+  const lastCompletedJob =
+    compJobs.find(
+      (j) =>
+        j.status === "completed" &&
+        jobs.find((j2) => j2.id === j.id)?.jobType !== "fractal-render" &&
+        jobs.find((j2) => j2.id === j.id)?.jobType !== "enterprise-analysis"
+    ) ?? null;
 
   // Active fractal job (most recent fractal-render, running or completed)
   const fractalJob = useMemo(
@@ -189,26 +243,12 @@ export default function HostPage() {
     [sortedJobs]
   );
 
-  const statCards = [
-    {
-      label: "Active Workers",
-      value: String(activeWorkers.length),
-      sub: `${workers.length - activeWorkers.length} offline`,
-      icon: Users,
-      accent: "text-[#6f0600]",
-    },
-    {
-      label: "Net Carbon Saved",
-      value: formatCarbonSaved(totalCarbonSavedGrams),
-      sub: "Estimated vs 250 gCO2e/kWh baseline",
-      icon: Leaf,
-      accent: totalCarbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]",
-    },
-  ];
+  const workerCountLabel = `${activeWorkers.length}/${workers.length || 0}`;
+  const taskCountLabel = `${runningJobs.length}/${jobs.length || 0}`;
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar workerCountLabel={workerCountLabel} taskCountLabel={taskCountLabel} />
 
       <main className="md:ml-64 flex-1 p-6 md:p-10 lg:p-14 max-w-[1400px]">
         {/* Page header */}
@@ -292,83 +332,28 @@ export default function HostPage() {
           </div>
         )}
 
-        {/* Stat cards */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          {statCards.map((stat) => {
-            const Icon = stat.icon;
-            return (
-              <div
-                key={stat.label}
-                className="bg-white p-5 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all"
-              >
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
-                      {stat.label}
-                    </p>
-                    <h3 className="text-3xl font-black tracking-tighter text-[#120B09] mt-0.5">
-                      {stat.value}
-                    </h3>
-                  </div>
-                  <div className="p-1.5 bg-[#F5F1EE] rounded-sm">
-                    <Icon size={16} className={stat.accent} />
-                  </div>
-                </div>
-                <p className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">{stat.sub}</p>
+        {/* Global metrics graphs */}
+        {workers.length > 0 && (
+          <section className="mb-8">
+            <div className="bg-white border border-[#120B09]/5 shadow-sm rounded-sm p-5 md:p-6 hover:border-[#EF8354]/20 transition-all">
+              <div className="mb-4">
+
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                  Fleet Telemetry
+                </p>
+                
+                <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-[#120B09]">
+                  Global Metrics
+                </h2>
               </div>
-            );
-          })}
-        </section>
+              <GlobalMetricsPanel workers={workers} jobs={jobs} />
+            </div>
+          </section>
+        )}
 
         <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 mb-10">
-          <div className="xl:col-span-2 bg-white p-5 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
-                  Fractal Render
-                </p>
-                <h3 className="text-2xl font-black tracking-tighter text-[#120B09] mt-0.5">
-                  Real-Time Compute Demo
-                </h3>
-                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif] mt-1">
-                  Launch a distributed Mandelbrot render across connected browser workers.
-                </p>
-              </div>
-              <div className="p-2 bg-[#F5F1EE] rounded-sm">
-                <Rocket size={18} className="text-[#6f0600]" />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
-                Difficulty
-              </span>
-              <span className="text-sm font-black text-[#EF8354] font-[Inter,sans-serif]">
-                {difficulty}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={100}
-              value={difficulty}
-              onChange={(e) => setDifficulty(Number(e.target.value))}
-              disabled={isFractalRunning}
-              className="w-full h-2 accent-[#EF8354] cursor-pointer disabled:opacity-40"
-            />
-            <div className="flex items-center justify-between mt-2 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
-              <span>{fractalConfig.width}×{fractalConfig.height}</span>
-              <span>{fractalConfig.maxIterations} iterations</span>
-            </div>
-
-            <button
-              onClick={() => submitFractalJob(fractalConfig)}
-              disabled={!isConnected || isFractalRunning}
-              className="mt-5 w-full px-4 py-3 bg-[#6f0600] text-white font-black text-[11px] uppercase tracking-widest rounded-sm hover:bg-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
-              title={isFractalRunning ? "Fractal render in progress…" : "Launch distributed fractal render"}
-            >
-              {isFractalRunning ? "Fractal Running…" : "Launch Fractal Render"}
-            </button>
+          <div className="xl:col-span-2">
+            <CommandDispatchCard onSubmit={submitJob} />
           </div>
 
           <div className="xl:col-span-3 bg-white p-6 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all">
@@ -407,13 +392,61 @@ export default function HostPage() {
               <span className="text-[#4A3935]/35">Balanced</span>
               <span className="text-[#6f0600]">Best Performance</span>
             </div>
+
+            <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-sm bg-[#F8F5F2] px-4 py-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif]">
+                  Session Grid Avg
+                </p>
+                <p className="mt-1 text-2xl font-black tracking-tighter text-[#120B09]">
+                  {averageCarbonIntensity !== null ? `${averageCarbonIntensity}` : "—"}
+                </p>
+                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif]">
+                  {averageCarbonIntensity !== null ? "gCO2e/kWh across active workers" : "Awaiting carbon-aware workers"}
+                </p>
+              </div>
+              <div className="rounded-sm bg-[#F8F5F2] px-4 py-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif]">
+                  Cleanest Worker
+                </p>
+                <p className="mt-1 text-lg font-black tracking-tight text-[#120B09]">
+                  {cleanestWorker?.name ?? "—"}
+                </p>
+                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif]">
+                  {cleanestWorker?.carbonIntensity !== undefined
+                    ? `${Math.round(cleanestWorker.carbonIntensity)} gCO2e/kWh`
+                    : "No carbon readings yet"}
+                </p>
+              </div>
+              <div className="rounded-sm bg-[#F8F5F2] px-4 py-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif]">
+                  Fastest Worker
+                </p>
+                <p className="mt-1 text-lg font-black tracking-tight text-[#120B09]">
+                  {fastestWorker?.name ?? "—"}
+                </p>
+                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif]">
+                  {fastestWorker?.benchmark?.normalizedScore !== undefined
+                    ? `Benchmark ${Math.round(fastestWorker.benchmark.normalizedScore)}`
+                    : "No benchmark scores yet"}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-sm border border-[#120B09]/8 bg-[#120B09] px-4 py-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-white/35 font-[Inter,sans-serif]">
+                Live Routing Bias
+              </p>
+              <p className="mt-1 text-sm font-medium text-white/80">
+                {schedulerBias <= 0.33
+                  ? "New work is leaning toward cleaner workers whenever possible, while still using the active benchmark network."
+                  : schedulerBias >= 0.67
+                  ? "New work is leaning toward the fastest benchmarked workers, even when cleaner nodes are available."
+                  : "New work is balancing cleaner routing with stronger benchmarked workers."}
+              </p>
+            </div>
           </div>
         </section>
-
-        {/* Global metrics graphs */}
-        {workers.length > 0 && (
-          <GlobalMetricsPanel workers={workers} jobs={jobs} />
-        )}
 
         {/* Top grid: Session + QR + Voice + Composer */}
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-10">
@@ -422,22 +455,182 @@ export default function HostPage() {
             workerCount={activeWorkers.length}
           />
           <QRCard session={compSession} />
-          <VoiceCommandCard onTranscript={submitJob} />
-          <JobComposer onSubmit={submitJob} />
-        </section>
+          <div className="md:col-span-2 xl:col-span-2 bg-white p-4 border border-[#120B09]/5 shadow-sm rounded-sm hover:border-[#EF8354]/20 transition-all self-start">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                  Benchmark Network
+                </p>
+                <h3 className="text-xl font-black tracking-tighter text-[#120B09] mt-0.5">
+                  Shared Difficulty
+                </h3>
+                <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif] mt-1">
+                  Scale fractal and enterprise runs with one control.
+                </p>
+              </div>
+              <div className="p-2 bg-[#F5F1EE] rounded-sm">
+                <Rocket size={18} className="text-[#6f0600]" />
+              </div>
+            </div>
 
-        {/* Fractal canvas — shown once a fractal-render job has been submitted */}
-        {fractalJob && (
-          <section className="mb-10">
-            <FractalCanvas key={fractalJob.id} job={fractalJob} tiles={fractalTiles} />
-          </section>
-        )}
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+                Difficulty
+              </span>
+              <span className="text-sm font-black text-[#EF8354] font-[Inter,sans-serif]">
+                {difficulty}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={100}
+              value={difficulty}
+              onChange={(e) => setDifficulty(Number(e.target.value))}
+              disabled={isFractalRunning}
+              className="w-full h-2 accent-[#EF8354] cursor-pointer disabled:opacity-40"
+            />
+            <div className="flex items-center justify-between mt-2 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
+              <span>{fractalConfig.width}×{fractalConfig.height}</span>
+              <span>{enterpriseBenchmarkConfig.vendorCount} vendors</span>
+              <span>{fractalConfig.maxIterations} iterations</span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+              <button
+                onClick={() => submitFractalJob(fractalConfig)}
+                disabled={!isConnected || isFractalRunning}
+                className="w-full px-4 py-2.5 bg-[#6f0600] text-white font-black text-[10px] uppercase tracking-widest rounded-sm hover:bg-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+                title={isFractalRunning ? "Fractal render in progress…" : "Launch distributed fractal render"}
+              >
+                {isFractalRunning ? "Fractal Running…" : "Launch Fractal"}
+              </button>
+
+              <button
+                onClick={() =>
+                  submitEnterpriseBenchmark(
+                    enterpriseBenchmarkCommand,
+                    enterpriseBenchmarkConfig
+                  )
+                }
+                disabled={!isConnected}
+                className="w-full px-4 py-2.5 bg-[#120B09] text-white font-black text-[10px] uppercase tracking-widest rounded-sm hover:bg-[#2a1b17] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+              >
+                Launch Enterprise
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-sm border border-[#120B09]/8 bg-[#F8F5F2] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                  Enterprise Scope
+                </p>
+                <p className="text-lg font-black tracking-tighter text-[#6f0600]">
+                  {enterpriseBenchmarkConfig.vendorCount}
+                </p>
+              </div>
+              <p className="text-[10px] text-[#4A3935]/55 mt-1">
+                {getEnterpriseDifficultyLabel(enterpriseBenchmarkConfig)} depth across the benchmark network.
+              </p>
+            </div>
+          </div>
+        </section>
 
         {/* Progress + Result */}
         {(activeJob || lastCompletedJob) && (
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
-            {activeJob && <ProgressSummaryCard job={activeJob} />}
+            <div className="space-y-4">
+              {activeJob && <ProgressSummaryCard job={activeJob} />}
+              {fractalJob && (
+                <div className="border border-[#120B09]/5 bg-white rounded-sm shadow-sm overflow-hidden">
+                  <button
+                    onClick={() => setShowFractalResults((current) => !current)}
+                    className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-[#FAFAF8] transition-all"
+                  >
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                        Fractal Results
+                      </p>
+                      <h3 className="text-lg font-black tracking-tight text-[#120B09]">
+                        {fractalJob.title}
+                      </h3>
+                    </div>
+                    {showFractalResults ? (
+                      <ChevronUp size={16} className="text-[#6f0600]" />
+                    ) : (
+                      <ChevronDown size={16} className="text-[#6f0600]" />
+                    )}
+                  </button>
+                  {showFractalResults && (
+                    <div className="px-5 pb-5">
+                      <FractalCanvas key={fractalJob.id} job={fractalJob} tiles={fractalTiles} />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             {lastCompletedJob && <ResultPanel job={lastCompletedJob} />}
+          </section>
+        )}
+
+        {!activeJob && fractalJob && (
+          <section className="mb-10">
+            <div className="border border-[#120B09]/5 bg-white rounded-sm shadow-sm overflow-hidden">
+              <button
+                onClick={() => setShowFractalResults((current) => !current)}
+                className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-[#FAFAF8] transition-all"
+              >
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                    Fractal Results
+                  </p>
+                  <h3 className="text-lg font-black tracking-tight text-[#120B09]">
+                    {fractalJob.title}
+                  </h3>
+                </div>
+                {showFractalResults ? (
+                  <ChevronUp size={16} className="text-[#6f0600]" />
+                ) : (
+                  <ChevronDown size={16} className="text-[#6f0600]" />
+                )}
+              </button>
+              {showFractalResults && (
+                <div className="px-5 pb-5">
+                  <FractalCanvas key={fractalJob.id} job={fractalJob} tiles={fractalTiles} />
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Enterprise result */}
+        {latestEnterpriseJob && (
+          <section className="mb-10">
+            <div className="border border-[#120B09]/5 bg-white rounded-sm shadow-sm overflow-hidden">
+              <button
+                onClick={() => setShowEnterpriseResults((current) => !current)}
+                className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-[#FAFAF8] transition-all"
+              >
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/45 font-[Inter,sans-serif]">
+                    Enterprise Vendor Results
+                  </p>
+                  <h3 className="text-lg font-black tracking-tight text-[#120B09]">
+                    {latestEnterpriseJob.name}
+                  </h3>
+                </div>
+                {showEnterpriseResults ? (
+                  <ChevronUp size={16} className="text-[#6f0600]" />
+                ) : (
+                  <ChevronDown size={16} className="text-[#6f0600]" />
+                )}
+              </button>
+              {showEnterpriseResults && (
+                <div className="px-5 pb-5">
+                  <ResultPanel job={latestEnterpriseJob} wide />
+                </div>
+              )}
+            </div>
           </section>
         )}
 
