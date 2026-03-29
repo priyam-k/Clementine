@@ -138,6 +138,9 @@ export function makeScheduleNode(io: IO) {
       }
       updateJob(ctx.jobId, {
         taskIds,
+        totalTasks: taskIds.length,
+        completedTasks: 0,
+        failedTasks: 0,
         normalizedCommand: JSON.stringify({
           hint: decomposition.resultSummaryHint,
           original: command,
@@ -216,9 +219,12 @@ export function makeReduceNode(io: IO) {
     if (job.jobType !== "fractal-render") {
       try {
         const model = getK2Model();
-        const taskSummaries = tasks
-          .filter(t => t.status === "completed")
-          .map(t => `${t.title}: ${t.description}`);
+        // Tasks may already be deleted from the store by the time reduce runs
+        // (socket-handlers deletes them one-by-one as they complete).
+        // Fall back to the original decomposition specs which are in graph state.
+        const taskSummaries = tasks.length > 0
+          ? tasks.filter(t => t.status === "completed").map(t => `${t.title}: ${t.description}`)
+          : (decomposition?.tasks ?? []).map(s => `${s.title}: ${s.description}`);
         const hint = decomposition?.resultSummaryHint ?? "Distributed computation completed.";
 
         const synthesisPrompt = ChatPromptTemplate.fromMessages([
