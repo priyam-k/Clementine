@@ -51,6 +51,8 @@ export interface JobResult {
   durationMs: number;
   workerCount: number;
   dataProcessed: string;
+  totalCarbonGrams?: number;
+  carbonSavedGrams?: number;
 }
 
 export interface CommandEntry {

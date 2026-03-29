@@ -1,5 +1,5 @@
 "use client";
-import { CheckCircle2, Download, Clock, Users } from "lucide-react";
+import { CheckCircle2, Download, Clock, Leaf, Users } from "lucide-react";
 import type { Job } from "@/lib/types";
 import { formatDuration } from "@/lib/mock-data";
 
@@ -49,6 +49,25 @@ export function ResultPanel({ job }: ResultPanelProps) {
           </div>
         ))}
       </div>
+
+      {/* Carbon footprint */}
+      {result.totalCarbonGrams != null && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-sm bg-green-950/30 border border-green-500/20">
+          <Leaf size={11} className="text-green-400 shrink-0" />
+          <p className="text-[10px] font-[Inter,sans-serif] text-green-300/80">
+            ~{result.totalCarbonGrams < 0.001
+              ? "<0.001"
+              : result.totalCarbonGrams.toFixed(4)}{" "}
+            gCO₂ estimated
+            {result.carbonSavedGrams != null && result.carbonSavedGrams > 0 && (
+              <span className="text-green-400 font-bold">
+                {" · "}
+                {result.carbonSavedGrams.toFixed(4)} gCO₂ saved vs dirtiest worker
+              </span>
+            )}
+          </p>
+        </div>
+      )}
 
       {/* Output log */}
       <div className="bg-black/40 rounded-sm p-3 max-h-40 overflow-y-auto custom-scrollbar">

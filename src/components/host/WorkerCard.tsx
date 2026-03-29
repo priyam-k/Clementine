@@ -1,8 +1,14 @@
 "use client";
-import { Activity, BatteryCharging, CheckCircle2, Cpu, Gauge, Timer } from "lucide-react";
-import type { WireWorker } from "@/lib/shared-types";
+import { Activity, BatteryCharging, CheckCircle2, Cpu, Gauge, Leaf, Timer } from "lucide-react";
+import type { WireWorker, CarbonTier } from "@/lib/shared-types";
 import { WorkerStatusBadge } from "@/components/ui/Badge";
 import { formatBattery, formatDuration, formatPercent, formatRelativeTime, getWorkerDeviceSummary } from "@/lib/worker-format";
+
+const CARBON_TIER_CONFIG: Record<CarbonTier, { dot: string; label: string; text: string }> = {
+  green:    { dot: "bg-green-500",  label: "Green",    text: "text-green-700"  },
+  moderate: { dot: "bg-yellow-400", label: "Moderate", text: "text-yellow-700" },
+  high:     { dot: "bg-red-500",    label: "High CO₂", text: "text-red-700"    },
+};
 
 interface WorkerCardProps {
   worker: WireWorker;
@@ -82,6 +88,21 @@ export function WorkerCard({ worker }: WorkerCardProps) {
             <BatteryCharging size={10} className={worker.telemetry?.battery?.charging ? "text-green-600" : "text-[#4A3935]/30"} />
             {formatBattery(batteryLevel)}
           </span>
+        </div>
+      )}
+
+      {/* Carbon intensity badge */}
+      {!isOffline && (
+        <div className="mt-2 pt-2 border-t border-[#120B09]/5 flex items-center gap-1.5">
+          <Leaf size={10} className={worker.carbonData ? CARBON_TIER_CONFIG[worker.carbonData.tier].text : "text-[#4A3935]/20"} />
+          {worker.carbonData ? (
+            <span className={`text-[9px] font-bold font-[Inter,sans-serif] ${CARBON_TIER_CONFIG[worker.carbonData.tier].text}`}>
+              <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${CARBON_TIER_CONFIG[worker.carbonData.tier].dot}`} />
+              {worker.carbonData.zone} · {worker.carbonData.gCO2perKWh} gCO₂/kWh · {CARBON_TIER_CONFIG[worker.carbonData.tier].label}
+            </span>
+          ) : (
+            <span className="text-[9px] text-[#4A3935]/30 font-[Inter,sans-serif]">No carbon data</span>
+          )}
         </div>
       )}
     </div>

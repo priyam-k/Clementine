@@ -87,6 +87,8 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
           durationMs: j.result.durationMs,
           workerCount: j.result.workerCount,
           dataProcessed: j.result.dataProcessed,
+          totalCarbonGrams: j.result.totalCarbonGrams,
+          carbonSavedGrams: j.result.carbonSavedGrams,
         }
       : undefined,
   };

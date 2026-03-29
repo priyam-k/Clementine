@@ -1,4 +1,5 @@
 "use client";
+"use client";
 import { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -6,6 +7,7 @@ import { WorkerStatusCard } from "@/components/join/WorkerStatusCard";
 import { CurrentTaskCard } from "@/components/join/CurrentTaskCard";
 import { useWorkerSession } from "@/hooks/useWorkerSession";
 import type { SubTask } from "@/lib/types";
+import type { WorkerLocation } from "@/lib/shared-types";
 import {
   Wifi,
   Loader2,
@@ -13,7 +15,21 @@ import {
   Settings,
   BarChart2,
   Zap,
+  Leaf,
 } from "lucide-react";
+
+// ─── Geolocation helper ────────────────────────────────────────────────────────
+
+async function requestLocation(): Promise<WorkerLocation | null> {
+  if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: 6000, maximumAge: 60000 }
+    );
+  });
+}
 
 // ─── Worker name generation ───────────────────────────────────────────────────
 
@@ -52,6 +68,7 @@ function JoinPageInner() {
   const [joinCode, setJoinCode] = useState(codeFromUrl);
   const [manualJoined, setManualJoined] = useState(false);
   const [hasLeft, setHasLeft] = useState(false);
+  const [workerLocation, setWorkerLocation] = useState<WorkerLocation | null>(null);
 
   const workerName = useMemo(
     () => WORKER_NAMES[Math.floor(Math.random() * WORKER_NAMES.length)],
@@ -67,14 +84,20 @@ function JoinPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!codeFromUrl || hasLeft) return;
-    joinSession(codeFromUrl, workerName, deviceName);
+    void requestLocation().then((loc) => {
+      setWorkerLocation(loc);
+      joinSession(codeFromUrl, workerName, deviceName, loc ?? undefined);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeFromUrl]);
 
   const handleJoin = () => {
     const code = joinCode.trim().toUpperCase();
     if (!code) return;
-    joinSession(code, workerName, deviceName);
+    void requestLocation().then((loc) => {
+      setWorkerLocation(loc);
+      joinSession(code, workerName, deviceName, loc ?? undefined);
+    });
     setManualJoined(true);
     setHasLeft(false);
   };
@@ -230,6 +253,23 @@ function JoinPageInner() {
               </p>
               <p className="text-[9px] text-[#4A3935]/50 font-[Inter,sans-serif] mt-0.5">
                 Waiting for the host to dispatch work…
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Carbon location indicator */}
+        {joined && (
+          <div className="bg-white border border-[#120B09]/5 rounded-sm px-4 py-3 flex items-center gap-3">
+            <Leaf size={13} className={workerLocation ? "text-green-500" : "text-[#4A3935]/30"} />
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#4A3935]/50 font-[Inter,sans-serif]">
+                Carbon-Aware Scheduling
+              </p>
+              <p className="text-[10px] font-medium text-[#4A3935]/70 font-[Inter,sans-serif] mt-0.5">
+                {workerLocation
+                  ? `Location shared — scheduler will prefer your grid's green windows`
+                  : `Location not shared — contributing without carbon data`}
               </p>
             </div>
           </div>

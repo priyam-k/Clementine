@@ -1,6 +1,21 @@
 import type { ServerJob, ServerTask } from "./types";
 import type { WireResult } from "../lib/shared-types";
 
+// ─── Carbon estimation ────────────────────────────────────────────────────────
+// Assumes 15W average power draw per browser worker during a task.
+// estimatedCarbonGrams = watts × durationSeconds × (gCO2perKWh / 3_600_000)
+// where 3_600_000 converts Wh to W·s (1 kWh = 3,600,000 W·s).
+
+const ESTIMATED_WATTS = 15;
+
+function estimateTaskCarbon(task: ServerTask): number | undefined {
+  if (task.carbonIntensityAtAssignment == null) return undefined;
+  const startedAt = task.startedAt ?? 0;
+  const completedAt = task.completedAt ?? Date.now();
+  const durationSeconds = Math.max(completedAt - startedAt, 0) / 1000;
+  return (ESTIMATED_WATTS * durationSeconds * task.carbonIntensityAtAssignment) / 3_600_000;
+}
+
 // ─── Result reducer: aggregates all task outputs into a final WireResult ──────
 
 export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResult {
@@ -42,6 +57,37 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
     outputLines.push(`✗ ${task.title} — failed`);
   }
 
+  // ── Carbon metrics ──────────────────────────────────────────────────────────
+  let totalCarbonGrams: number | undefined;
+  let worstCarbonGrams: number | undefined;
+
+  const tasksWithCarbon = completedTasks.filter(
+    (t) => t.carbonIntensityAtAssignment != null
+  );
+
+  if (tasksWithCarbon.length > 0) {
+    // Sum estimated carbon for actual execution
+    totalCarbonGrams = tasksWithCarbon.reduce((sum, t) => {
+      return sum + (estimateTaskCarbon(t) ?? 0);
+    }, 0);
+
+    // Compute worst-case carbon using the highest carbon intensity among all workers used
+    const maxIntensity = Math.max(
+      ...tasksWithCarbon.map((t) => t.carbonIntensityAtAssignment!)
+    );
+    worstCarbonGrams = tasksWithCarbon.reduce((sum, t) => {
+      const startedAt = t.startedAt ?? 0;
+      const completedAt = t.completedAt ?? Date.now();
+      const durationSeconds = Math.max(completedAt - startedAt, 0) / 1000;
+      return sum + (ESTIMATED_WATTS * durationSeconds * maxIntensity) / 3_600_000;
+    }, 0);
+  }
+
+  const carbonSavedGrams =
+    totalCarbonGrams != null && worstCarbonGrams != null
+      ? Math.max(worstCarbonGrams - totalCarbonGrams, 0)
+      : undefined;
+
   const successRate =
     completedTasks.length > 0
       ? Math.round((completedTasks.length / tasks.length) * 100)
@@ -78,6 +124,8 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
       completedTasks: completedTasks.length,
       failedTasks: failedTasks.length,
     },
+    totalCarbonGrams,
+    carbonSavedGrams,
   };
 }
 

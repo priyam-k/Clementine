@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/pranavkatarru/**)",
+      "Bash(wc -l /Users/pranavkatarru/Programming Projects/Clementine/src/**/*.ts /Users/pranavkatarru/Programming Projects/Clementine/src/**/*.tsx)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

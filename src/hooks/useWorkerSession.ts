@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { connectSocket, disconnectSocket, getSocket } from "./useSocket";
-import type { WireTask, FractalTileInput } from "@/lib/shared-types";
+import type { WireTask, FractalTileInput, WorkerLocation } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
 
@@ -80,7 +80,7 @@ export interface WorkerSessionState {
   workerStatus: "idle" | "working" | "done" | "offline";
   currentTask: WireTask | null;
   tasksCompleted: number;
-  joinSession: (sessionCode: string, name: string, device: string) => void;
+  joinSession: (sessionCode: string, name: string, device: string, location?: WorkerLocation) => void;
   leaveSession: () => void;
   sessionCode: string;
 }
@@ -99,7 +99,7 @@ export function useWorkerSession(): WorkerSessionState {
 
   // Prevent double-execution in React Strict Mode
   const executingRef = useRef<string | null>(null);
-  const joinProfileRef = useRef<{ code: string; name: string; device: string } | null>(null);
+  const joinProfileRef = useRef<{ code: string; name: string; device: string; location?: WorkerLocation } | null>(null);
   const profileSentRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -112,7 +112,10 @@ export function useWorkerSession(): WorkerSessionState {
 
       const profile = await collectWorkerProfile(fallbackDevice);
       if (profile.device || profile.telemetry || profile.benchmark) {
-        socket.emit("worker:profile", profile);
+        socket.emit("worker:profile", {
+          ...profile,
+          location: joinProfileRef.current?.location,
+        });
       }
     };
 
@@ -170,6 +173,7 @@ export function useWorkerSession(): WorkerSessionState {
           sessionCode: pendingJoin.code,
           name: pendingJoin.name,
           device: pendingJoin.device,
+          location: pendingJoin.location,
         });
         void publishProfile(pendingJoin.device);
       }
@@ -205,23 +209,23 @@ export function useWorkerSession(): WorkerSessionState {
     };
   }, []);
 
-  const joinSession = useCallback((code: string, name: string, device: string) => {
+  const joinSession = useCallback((code: string, name: string, device: string, location?: WorkerLocation) => {
     setConnectionState("connecting");
     setSessionCode(code);
-    joinProfileRef.current = { code, name, device };
+    joinProfileRef.current = { code, name, device, location };
     profileSentRef.current = null;
 
     const socket = connectSocket();
 
     if (socket.connected) {
       // Already connected — join immediately
-      socket.emit("worker:join", { sessionCode: code, name, device });
+      socket.emit("worker:join", { sessionCode: code, name, device, location });
       setConnectionState("connected");
       setWorkerStatus("idle");
       void (async () => {
         const profile = await collectWorkerProfile(device);
         if (profile.device || profile.telemetry || profile.benchmark) {
-          socket.emit("worker:profile", profile);
+          socket.emit("worker:profile", { ...profile, location });
           profileSentRef.current = `${socket.id}:${device}`;
         }
       })();

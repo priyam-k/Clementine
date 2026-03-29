@@ -1,6 +1,20 @@
 // ─── Wire types: shared between server and client (no Node.js deps) ─────────
 
 export type WorkerType = "browser" | "desktop" | "gpu" | "native";
+export type CarbonTier = "green" | "moderate" | "high";
+
+export interface WorkerLocation {
+  latitude: number;
+  longitude: number;
+}
+
+export interface WorkerCarbonData {
+  zone: string;
+  gCO2perKWh: number;
+  fossilFuelPercentage?: number;
+  tier: CarbonTier;
+  updatedAt: number;
+}
 export type WorkerStatus = "idle" | "working" | "done" | "offline";
 export type TaskStatus = "queued" | "assigned" | "running" | "completed" | "failed";
 export type WorkerPerformanceTier = "fast" | "medium" | "slow";
@@ -85,6 +99,8 @@ export interface WireWorker {
   benchmark?: WorkerBenchmark;
   metrics: WorkerRuntimeMetrics;
   isHost?: boolean;
+  location?: WorkerLocation;
+  carbonData?: WorkerCarbonData;
 }
 
 export interface WireTask {
@@ -124,6 +140,8 @@ export interface WireResult {
   workerCount: number;
   dataProcessed: string;
   metrics: Record<string, number | string>;
+  totalCarbonGrams?: number;
+  carbonSavedGrams?: number;
 }
 
 export interface WireSession {
@@ -156,11 +174,13 @@ export interface ClientToServerEvents {
     sessionCode: string;
     name: string;
     device: string;
+    location?: WorkerLocation;
   }) => void;
   "worker:profile": (data: {
     device?: string;
     telemetry?: WorkerTelemetry;
     benchmark?: WorkerBenchmark;
+    location?: WorkerLocation;
   }) => void;
   "job:submit": (data: { command: string }) => void;
   "fractal:submit": (config: FractalJobConfig) => void;

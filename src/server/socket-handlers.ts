@@ -29,8 +29,9 @@ import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
 import { reduceJobResults } from "./reducer";
 import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
+import { fetchCarbonIntensity, getCarbonTier } from "./carbon-api";
 import { networkInterfaces } from "os";
-import type { WorkerTelemetry } from "../lib/shared-types";
+import type { WorkerTelemetry, WorkerLocation } from "../lib/shared-types";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -65,6 +66,38 @@ function mergeTelemetry(
     battery: incoming.battery ? { ...current.battery, ...incoming.battery } : current.battery,
     storage: incoming.storage ? { ...current.storage, ...incoming.storage } : current.storage,
   };
+}
+
+// ─── Carbon fetch helper ──────────────────────────────────────────────────────
+
+async function fetchAndUpdateCarbon(
+  io: IO,
+  workerId: string,
+  sessionCode: string,
+  location: WorkerLocation
+): Promise<void> {
+  const carbon = await fetchCarbonIntensity(location.latitude, location.longitude);
+  if (!carbon) return;
+
+  updateWorker(workerId, {
+    carbonData: {
+      zone: carbon.zone,
+      gCO2perKWh: carbon.gCO2perKWh,
+      fossilFuelPercentage: carbon.fossilFuelPercentage,
+      tier: getCarbonTier(carbon.gCO2perKWh),
+      updatedAt: carbon.updatedAt,
+    },
+  });
+
+  console.log(`[carbon] Worker in zone ${carbon.zone}: ${carbon.gCO2perKWh} gCO2/kWh (${getCarbonTier(carbon.gCO2perKWh)})`);
+
+  const hostSocketId = getHostSocketForSession(sessionCode);
+  if (hostSocketId) {
+    io.to(hostSocketId).emit(
+      "workers:update",
+      getWorkersForSession(sessionCode).map(toWireWorker)
+    );
+  }
 }
 
 export function setupSocketHandlers(io: IO, port: number) {
@@ -115,7 +148,7 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Worker joins ──────────────────────────────────────────────────────────
-    socket.on("worker:join", ({ sessionCode, name, device }) => {
+    socket.on("worker:join", ({ sessionCode, name, device, location }) => {
       const session = getSession(sessionCode);
       if (!session) {
         socket.emit("error", { message: `Session ${sessionCode} not found` });
@@ -132,8 +165,13 @@ export function setupSocketHandlers(io: IO, port: number) {
         return;
       }
 
-      registerWorker(socket.id, { name, device, sessionCode });
-      console.log(`[worker] "${name}" joined session ${sessionCode}`);
+      const worker = registerWorker(socket.id, { name, device, sessionCode, location });
+      console.log(`[worker] "${name}" joined session ${sessionCode}${location ? ` (lat=${location.latitude.toFixed(2)},lng=${location.longitude.toFixed(2)})` : ""}`);
+
+      // Fire-and-forget carbon intensity fetch if location provided
+      if (location) {
+        void fetchAndUpdateCarbon(io, worker.id, worker.sessionCode, location);
+      }
 
       // Ack the worker
       const workers = getWorkersForSession(sessionCode).map(toWireWorker);
@@ -151,16 +189,29 @@ export function setupSocketHandlers(io: IO, port: number) {
       }
     });
 
-    socket.on("worker:profile", ({ device, telemetry, benchmark }) => {
+    socket.on("worker:profile", ({ device, telemetry, benchmark, location }) => {
       const worker = getWorkerBySocket(socket.id);
       if (!worker) return;
+
+      const locationToUse = location ?? worker.location;
 
       updateWorker(worker.id, {
         device: device ?? telemetry?.deviceLabel ?? worker.device,
         telemetry: mergeTelemetry(worker.telemetry, telemetry),
         benchmark: benchmark ?? worker.benchmark,
         lastHeartbeatAt: Date.now(),
+        location: locationToUse,
       });
+
+      // Fire-and-forget carbon fetch if we have location and no recent carbon data
+      if (locationToUse) {
+        const carbonAge = worker.carbonData
+          ? Date.now() - worker.carbonData.updatedAt
+          : Infinity;
+        if (carbonAge > 15 * 60 * 1000) {
+          void fetchAndUpdateCarbon(io, worker.id, worker.sessionCode, locationToUse);
+        }
+      }
 
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
       if (hostSocketId) {

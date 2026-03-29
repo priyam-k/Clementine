@@ -9,6 +9,8 @@ import type {
   FractalJobConfig,
   WorkerTelemetry,
   WorkerBenchmark,
+  WorkerLocation,
+  WorkerCarbonData,
 } from "../lib/shared-types";
 
 export interface ServerWorker {
@@ -35,6 +37,8 @@ export interface ServerWorker {
   pixelsRendered: number;
   totalTileDurationMs: number;
   isHost?: boolean;
+  location?: WorkerLocation;
+  carbonData?: WorkerCarbonData;
 }
 
 export interface ServerTask {
@@ -50,6 +54,8 @@ export interface ServerTask {
   startedAt?: number;
   completedAt?: number;
   progress: number;
+  carbonIntensityAtAssignment?: number;
+  estimatedCarbonGrams?: number;
 }
 
 export interface ServerJob {
@@ -66,6 +72,8 @@ export interface ServerJob {
   result?: WireResult;
   sessionCode: string;
   fractalConfig?: FractalJobConfig;
+  totalCarbonGrams?: number;
+  carbonSavedGrams?: number;
 }
 
 export interface ServerSession {

@@ -25,6 +25,8 @@ type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 // Weights: CPU is dominant, RAM secondary, GPU tertiary.
 // Also penalizes workers that already have more tasks completed
 // (to spread load across fresh nodes when available).
+// Carbon penalty: gCO2/kWh above a 200 gCO2/kWh neutral baseline, weight=30.
+// Workers with no carbon data get 0 penalty (treated as neutral).
 
 function workerScore(w: ReturnType<typeof getIdleWorkersForSession>[number]): number {
   const connectedMs = Math.max(Date.now() - w.connectedAt, 1);
@@ -32,8 +34,13 @@ function workerScore(w: ReturnType<typeof getIdleWorkersForSession>[number]): nu
   const avgTaskDurationPenalty = (w.totalTaskDurationMs / Math.max(w.tasksCompleted, 1)) / 250;
   const benchmarkBonus = (w.benchmark?.normalizedScore ?? 55) * 0.45;
   const fairnessPenalty = w.tasksCompleted * 1.5;
+  // Carbon penalty: normalised to 200 gCO2/kWh baseline, weight 30
+  // e.g. 20 gCO2/kWh → -27 (bonus), 500 gCO2/kWh → +75 (penalty)
+  const carbonPenalty = w.carbonData
+    ? (w.carbonData.gCO2perKWh / 200) * 30
+    : 0;
 
-  return busyRatio * 60 + avgTaskDurationPenalty + fairnessPenalty - benchmarkBonus;
+  return busyRatio * 60 + avgTaskDurationPenalty + fairnessPenalty - benchmarkBonus + carbonPenalty;
 }
 
 export function runScheduler(io: IO, sessionCode: string, hostSocketId: string) {
@@ -55,6 +62,7 @@ export function runScheduler(io: IO, sessionCode: string, hostSocketId: string) 
       status: "assigned",
       assignedWorkerId: worker.id,
       startedAt: Date.now(),
+      carbonIntensityAtAssignment: worker.carbonData?.gCO2perKWh,
     });
 
     // Update worker

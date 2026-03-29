@@ -6,6 +6,7 @@ import type {
   FractalJobConfig,
   JobType,
   WorkerTelemetry,
+  WorkerLocation,
 } from "../lib/shared-types";
 import { benchmarkPixelsPerSecond } from "../lib/worker-benchmark";
 
@@ -67,6 +68,7 @@ export function registerWorker(socketId: string, data: {
   sessionCode: string;
   isHost?: boolean;
   telemetry?: WorkerTelemetry;
+  location?: WorkerLocation;
 }): ServerWorker {
   const id = `wkr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const now = Date.now();
@@ -90,6 +92,7 @@ export function registerWorker(socketId: string, data: {
     pixelsRendered: 0,
     totalTileDurationMs: 0,
     isHost: data.isHost,
+    location: data.location,
   };
   workers.set(id, worker);
   socketToWorker.set(socketId, id);
@@ -256,6 +259,8 @@ export function toWireWorker(w: ServerWorker): WireWorker {
       taskEfficiency,
     },
     isHost: w.isHost,
+    location: w.location,
+    carbonData: w.carbonData,
   };
 }
 
