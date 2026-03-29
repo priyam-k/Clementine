@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { X, Copy, Download, Check } from "lucide-react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
@@ -56,17 +56,14 @@ function InfoGrid({ rows }: { rows: Array<{ label: string; value: string }> }) {
   return (
     <div className="grid grid-cols-[130px_1fr] gap-x-3 gap-y-1.5">
       {rows.map(({ label, value }) => (
-        <>
-          <span
-            key={`l-${label}`}
-            className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40"
-          >
+        <React.Fragment key={label}>
+          <span className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/40">
             {label}
           </span>
-          <span key={`v-${label}`} className="text-[10px] text-[#120B09] font-medium break-words">
+          <span className="text-[10px] text-[#120B09] font-medium break-words">
             {value}
           </span>
-        </>
+        </React.Fragment>
       ))}
     </div>
   );
