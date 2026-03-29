@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { useHostSession } from "@/hooks/useHostSession";
 import { JobStatusBadge, TaskStatusBadge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { MarkdownArtifactView } from "@/components/host/MarkdownArtifactView";
 import {
   ArrowLeft, CheckCircle2, Clock, RefreshCw, XCircle,
   ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download,
@@ -20,6 +21,7 @@ const JOB_TYPE_META: Record<JobType, { label: string; color: string; bg: string 
   "batch-inference": { label: "Inference", color: "text-blue-700", bg: "bg-blue-500" },
   "blender-render": { label: "Render", color: "text-green-700", bg: "bg-green-500" },
   "fractal-render": { label: "Fractal", color: "text-[#6f0600]", bg: "bg-[#6f0600]" },
+  "enterprise-analysis": { label: "Enterprise", color: "text-sky-700", bg: "bg-sky-500" },
 };
 
 function jobProgress(job: WireJob): number {
@@ -74,9 +76,24 @@ function JobCard({ job }: { job: WireJob }) {
   const failedCount = job.failedTasks;
   const duration = job.completedAt && job.startedAt ? job.completedAt - job.startedAt : null;
   const carbonSaved = getJobCarbonSavedGrams(job);
+  const markdownArtifact =
+    job.artifacts.find((artifact) => artifact.artifactType === "markdown") ?? null;
   const contributions = [...job.workerContributions].sort(
     (a, b) => b.tasksCompleted - a.tasksCompleted || b.totalDurationMs - a.totalDurationMs
   );
+
+  const handleDownloadArtifact = () => {
+    if (!markdownArtifact || typeof window === "undefined") return;
+    const blob = new Blob([markdownArtifact.content], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = markdownArtifact.filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className={`border rounded-sm transition-all ${job.status === "running" ? "border-[#EF8354]/30" : "border-[#120B09]/5"} bg-white`}>
@@ -206,15 +223,38 @@ function JobCard({ job }: { job: WireJob }) {
       {/* Result panel for completed jobs */}
       {job.status === "completed" && job.result && (
         <div className="border-t border-[#120B09]/5 px-5 py-4 bg-[#FAFAF8]">
-          <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">Result</p>
-          <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
-          <p className="text-[10px] font-black text-green-700 font-[Inter,sans-serif] mt-2">
-            Net carbon saved: {formatCarbonSaved(
-              typeof job.result.metrics.netCarbonSavedGrams === "number"
-                ? job.result.metrics.netCarbonSavedGrams
-                : carbonSaved
-            )}
-          </p>
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">
+                Result
+              </p>
+              <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
+            </div>
+            <button
+              onClick={handleDownloadArtifact}
+              disabled={!markdownArtifact}
+              className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-[#120B09]/8 text-[#120B09] font-black text-[9px] uppercase tracking-widest rounded-sm hover:border-[#EF8354]/30 hover:text-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+            >
+              <Download size={11} />
+              Export MD
+            </button>
+          </div>
+          {markdownArtifact ? (
+            <div className="rounded-sm bg-[#120B09] p-4 max-h-80 overflow-y-auto custom-scrollbar">
+              <MarkdownArtifactView content={markdownArtifact.content} />
+            </div>
+          ) : (
+            <div className="rounded-sm bg-white border border-[#120B09]/8 p-3">
+              {job.result.outputLines.slice(0, 8).map((line, index) => (
+                <p
+                  key={`${job.id}-result-line-${index}`}
+                  className="text-[10px] text-[#4A3935]/70 font-[Inter,sans-serif] leading-relaxed"
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -224,7 +264,7 @@ function JobCard({ job }: { job: WireJob }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
-  const { jobs, submitJob, isConnected, session } = useHostSession();
+  const { jobs, workers, submitJob, isConnected, session } = useHostSession();
   const [command, setCommand] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "completed" | "queued">("all");
   const [isDumping, setIsDumping] = useState(false);
@@ -308,7 +348,10 @@ export default function TasksPage() {
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar />
+      <Sidebar
+        workerCountLabel={`${workers.filter((worker) => worker.status !== "offline").length}/${workers.length || 0}`}
+        taskCountLabel={`${runningJobs.length}/${jobs.length || 0}`}
+      />
       <main className="md:ml-64 flex-1 p-6 md:p-10 lg:p-14">
         {/* Header */}
         <header className="mb-10">

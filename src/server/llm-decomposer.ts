@@ -3,6 +3,7 @@
 // Falls back gracefully if ANTHROPIC_API_KEY is not set.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { generateGeminiText } from "./gemini";
 
 export interface LLMTaskSpec {
   title: string;
@@ -91,24 +92,20 @@ export async function synthesizeResult(
   taskSummaries: string[],
   resultSummaryHint: string
 ): Promise<string> {
-  const anthropic = getClient();
-  if (!anthropic) return `${taskSummaries.length} tasks completed. ${resultSummaryHint}`;
-
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1500,
-      system: `You are a data analyst synthesizing results from a distributed computation job.
-Given the original request and completed task outputs, produce a clear, quantitative report.
-Be specific: include numbers, percentages, key findings. Format with bullet points.
-Keep it under 300 words.`,
-      messages: [{
-        role: "user",
-        content: `Original request: "${command}"\n\nCompleted tasks:\n${taskSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\nHint: ${resultSummaryHint}\n\nGenerate the final report:`,
-      }],
+    return await generateGeminiText({
+      systemInstruction: [
+        "You are Clementine's final result synthesizer.",
+        "Produce one clean, user-facing summary for a completed distributed job.",
+        "Use only the supplied job request and completed task outputs as evidence.",
+        "Do not mention prompts, parsing, hidden reasoning, or internal analysis.",
+        "Keep it concise, quantitative where possible, and readable in markdown-friendly prose.",
+      ].join(" "),
+      userPrompt: `Job title: "${jobTitle}"\nOriginal request: "${command}"\n\nCompleted task outputs:\n${taskSummaries
+        .map((summary, index) => `${index + 1}. ${summary}`)
+        .join("\n")}\n\nHint: ${resultSummaryHint}\n\nGenerate the final user-facing result summary.`,
+      temperature: 0.2,
     });
-
-    return response.content[0].type === "text" ? response.content[0].text : resultSummaryHint;
   } catch {
     return `${taskSummaries.length} tasks completed. ${resultSummaryHint}`;
   }

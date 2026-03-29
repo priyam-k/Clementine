@@ -114,6 +114,7 @@ export async function persistJobSnapshot(job: WireJob & { sessionCode: string })
       totalTasks: job.totalTasks,
       completedTasks: job.completedTasks,
       failedTasks: job.failedTasks,
+      artifacts: job.artifacts,
       result: job.result,
       sessionCode: job.sessionCode,
     };

@@ -22,6 +22,8 @@ export function decomposeJob(job: ServerJob): ServerTask[] {
       return decomposeBlenderRender(job);
     case "fractal-render":
       return decomposeFractalRender(job);
+    case "enterprise-analysis":
+      return decomposeLlmAnalysis(job);
     default:
       return decomposeMockCompute(job);
   }
@@ -125,6 +127,15 @@ export function detectJobType(command: string): JobType {
     return "batch-inference";
   }
   if (
+    lower.includes("vendor") ||
+    lower.includes("compliance") ||
+    lower.includes("enterprise") ||
+    lower.includes("risk") ||
+    lower.includes("selection")
+  ) {
+    return "enterprise-analysis";
+  }
+  if (
     lower.includes("analyze") ||
     lower.includes("analysis") ||
     lower.includes("neural") ||
@@ -152,6 +163,7 @@ export function deriveTitle(command: string, jobType: JobType): string {
     "batch-inference": "Batch Inference",
     "blender-render": "Render Job",
     "fractal-render": "Fractal Render",
+    "enterprise-analysis": "Enterprise Analysis",
   };
 
   if (cleaned.length < 6) return typeLabels[jobType];

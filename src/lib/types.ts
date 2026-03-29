@@ -43,6 +43,15 @@ export interface Job {
   completedAt?: string;
   estimatedCarbonSavedGrams?: number;
   subtasks: SubTask[];
+  artifacts?: Array<{
+    id: string;
+    artifactType: "markdown";
+    title: string;
+    filename: string;
+    content: string;
+    createdAt: number;
+    filePath?: string;
+  }>;
   workerContributions?: Array<{
     workerId: string;
     workerName: string;
