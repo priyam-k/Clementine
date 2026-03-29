@@ -34,6 +34,7 @@ export function createSession(hostSocketId: string, hostName: string, joinUrl: s
     hostName,
     joinUrl,
     startedAt: Date.now(),
+    schedulerBias: 0.5,
   };
   sessions.set(code, session);
   sessionToHost.set(code, hostSocketId);
@@ -59,6 +60,26 @@ export function getHostSocketForSession(code: string): string | undefined {
   return sessionToHost.get(code);
 }
 
+export function updateSessionHostSocket(code: string, hostSocketId: string): ServerSession | undefined {
+  const session = sessions.get(code);
+  if (!session) return undefined;
+  const updated = { ...session, hostSocketId };
+  sessions.set(code, updated);
+  sessionToHost.set(code, hostSocketId);
+  return updated;
+}
+
+export function updateSessionSchedulerBias(code: string, schedulerBias: number): ServerSession | undefined {
+  const session = sessions.get(code);
+  if (!session) return undefined;
+  const updated = {
+    ...session,
+    schedulerBias: Math.min(Math.max(schedulerBias, 0), 1),
+  };
+  sessions.set(code, updated);
+  return updated;
+}
+
 // ─── Worker ops ──────────────────────────────────────────────────────────────
 
 export function registerWorker(socketId: string, data: {
@@ -67,12 +88,20 @@ export function registerWorker(socketId: string, data: {
   sessionCode: string;
   isHost?: boolean;
   telemetry?: WorkerTelemetry;
+  lat?: number;
+  lon?: number;
+  carbonIntensity?: number;
+  activeTasks?: number;
 }): ServerWorker {
   const id = `wkr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const now = Date.now();
   const worker: ServerWorker = {
     id,
     socketId,
+    lat: data.lat,
+    lon: data.lon,
+    carbonIntensity: data.carbonIntensity,
+    activeTasks: data.activeTasks ?? 0,
     name: data.name,
     device: data.device,
     type: "browser",
@@ -121,6 +150,24 @@ export function updateWorker(id: string, updates: Partial<ServerWorker>): Server
   return updated;
 }
 
+export function rebindWorkerSocket(workerId: string, socketId: string): ServerWorker | undefined {
+  const worker = workers.get(workerId);
+  if (!worker) return undefined;
+
+  socketToWorker.forEach((mappedWorkerId, mappedSocketId) => {
+    if (mappedWorkerId === workerId) {
+      socketToWorker.delete(mappedSocketId);
+    }
+  });
+
+  socketToWorker.set(socketId, workerId);
+  return updateWorker(workerId, {
+    socketId,
+    status: worker.status === "offline" ? "idle" : worker.status,
+    lastHeartbeatAt: Date.now(),
+  });
+}
+
 export function markWorkerOffline(socketId: string): ServerWorker | undefined {
   const workerId = socketToWorker.get(socketId);
   if (!workerId) return undefined;
@@ -149,6 +196,15 @@ export function createJob(data: {
     status: "queued",
     createdAt: Date.now(),
     taskIds: [],
+    totalTasks: 0,
+    completedTasks: 0,
+    failedTasks: 0,
+    totalOps: 0,
+    totalDataProcessed: 0,
+    totalCarbonSavedGrams: 0,
+    workerIdsUsed: [],
+    completionSamples: [],
+    workerContributions: [],
     sessionCode: data.sessionCode,
     fractalConfig: data.fractalConfig,
   };
@@ -200,6 +256,10 @@ export function updateTask(id: string, updates: Partial<ServerTask>): ServerTask
   return updated;
 }
 
+export function deleteTask(id: string): boolean {
+  return tasks.delete(id);
+}
+
 // ─── Wire serializers ─────────────────────────────────────────────────────────
 
 export function toWireWorker(w: ServerWorker): WireWorker {
@@ -231,6 +291,7 @@ export function toWireWorker(w: ServerWorker): WireWorker {
     id: w.id,
     name: w.name,
     device: w.device,
+    carbonIntensity: w.carbonIntensity,
     type: w.type,
     status: w.status,
     capabilities: w.capabilities,
@@ -268,6 +329,10 @@ export function toWireTask(t: ServerTask): WireTask {
     jobType: t.jobType,
     status: t.status,
     assignedWorkerId: t.assignedWorkerId,
+    completedByWorkerId: t.completedByWorkerId,
+    completedByWorkerName: t.completedByWorkerName,
+    completedCarbonIntensity: t.completedCarbonIntensity,
+    estimatedCarbonSavedGrams: t.estimatedCarbonSavedGrams,
     inputPayload: t.inputPayload,
     outputPayload: t.outputPayload,
     startedAt: t.startedAt,
@@ -278,9 +343,9 @@ export function toWireTask(t: ServerTask): WireTask {
 
 export function toWireJob(j: ServerJob): WireJob {
   const jobTasks = getTasksForJob(j.id).map(toWireTask);
-  const completedCount = jobTasks.filter((t) => t.status === "completed").length;
+  const completedCount = j.completedTasks;
   const progress =
-    jobTasks.length > 0 ? Math.round((completedCount / jobTasks.length) * 100) : 0;
+    j.totalTasks > 0 ? Math.round((completedCount / j.totalTasks) * 100) : 0;
 
   return {
     id: j.id,
@@ -292,6 +357,10 @@ export function toWireJob(j: ServerJob): WireJob {
     startedAt: j.startedAt,
     completedAt: j.completedAt,
     tasks: jobTasks,
+    totalTasks: j.totalTasks,
+    completedTasks: j.completedTasks,
+    failedTasks: j.failedTasks,
+    workerContributions: j.workerContributions,
     result: j.result,
     // Attach computed progress as a non-standard field the client can use
     ...(({ progress } as unknown) as Record<string, unknown>),

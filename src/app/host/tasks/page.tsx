@@ -7,9 +7,10 @@ import { JobStatusBadge, TaskStatusBadge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import {
   ArrowLeft, CheckCircle2, Clock, RefreshCw, XCircle,
-  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle,
+  ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download,
 } from "lucide-react";
 import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
+import { formatCarbonSaved, getJobCarbonSavedGrams, getTaskCarbonSavedGrams } from "@/lib/carbon-metrics";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -22,8 +23,8 @@ const JOB_TYPE_META: Record<JobType, { label: string; color: string; bg: string 
 };
 
 function jobProgress(job: WireJob): number {
-  if (!job.tasks.length) return 0;
-  return Math.round(job.tasks.filter((t) => t.status === "completed").length / job.tasks.length * 100);
+  if (!job.totalTasks) return 0;
+  return Math.round((job.completedTasks / job.totalTasks) * 100);
 }
 
 function formatDuration(ms: number): string {
@@ -37,10 +38,10 @@ function formatDuration(ms: number): string {
 function avgTaskDuration(jobs: WireJob[]): number | null {
   const durations: number[] = [];
   for (const job of jobs) {
-    for (const task of job.tasks) {
-      if (task.completedAt && task.startedAt) {
-        durations.push(task.completedAt - task.startedAt);
-      }
+    if (job.result?.durationMs && job.totalTasks > 0) {
+      durations.push(job.result.durationMs / job.totalTasks);
+    } else if (job.completedAt && job.startedAt && job.totalTasks > 0) {
+      durations.push((job.completedAt - job.startedAt) / job.totalTasks);
     }
   }
   if (!durations.length) return null;
@@ -48,10 +49,11 @@ function avgTaskDuration(jobs: WireJob[]): number | null {
 }
 
 function successRate(jobs: WireJob[]): number {
-  const allTasks = jobs.flatMap((j) => j.tasks);
-  const done = allTasks.filter((t) => t.status === "completed" || t.status === "failed");
-  if (!done.length) return 100;
-  return Math.round(allTasks.filter((t) => t.status === "completed").length / done.length * 100);
+  const completed = jobs.reduce((sum, job) => sum + job.completedTasks, 0);
+  const failed = jobs.reduce((sum, job) => sum + job.failedTasks, 0);
+  const done = completed + failed;
+  if (!done) return 100;
+  return Math.round((completed / done) * 100);
 }
 
 // ─── Job Row with expandable subtasks ────────────────────────────────────────
@@ -68,9 +70,13 @@ function JobCard({ job }: { job: WireJob }) {
   const [open, setOpen] = useState(job.status === "running");
   const meta = JOB_TYPE_META[job.jobType];
   const pct = jobProgress(job);
-  const completedCount = job.tasks.filter((t) => t.status === "completed").length;
-  const failedCount = job.tasks.filter((t) => t.status === "failed").length;
+  const completedCount = job.completedTasks;
+  const failedCount = job.failedTasks;
   const duration = job.completedAt && job.startedAt ? job.completedAt - job.startedAt : null;
+  const carbonSaved = getJobCarbonSavedGrams(job);
+  const contributions = [...job.workerContributions].sort(
+    (a, b) => b.tasksCompleted - a.tasksCompleted || b.totalDurationMs - a.totalDurationMs
+  );
 
   return (
     <div className={`border rounded-sm transition-all ${job.status === "running" ? "border-[#EF8354]/30" : "border-[#120B09]/5"} bg-white`}>
@@ -97,7 +103,7 @@ function JobCard({ job }: { job: WireJob }) {
           <p className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif] truncate italic mb-2">
             &ldquo;{job.rawPrompt}&rdquo;
           </p>
-          {job.tasks.length > 0 && (
+          {job.totalTasks > 0 && (
             <div className="flex items-center gap-3">
               <ProgressBar value={pct} height="sm" />
               <span className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif] flex-shrink-0">{pct}%</span>
@@ -105,7 +111,10 @@ function JobCard({ job }: { job: WireJob }) {
           )}
           <div className="flex items-center gap-4 mt-1.5">
             <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">
-              {completedCount}/{job.tasks.length} tasks
+              {completedCount}/{job.totalTasks} tasks
+            </span>
+            <span className="text-[9px] text-green-700 font-black font-[Inter,sans-serif]">
+              {formatCarbonSaved(carbonSaved)} saved
             </span>
             {failedCount > 0 && (
               <span className="text-[9px] text-[#BA1A1A] font-black font-[Inter,sans-serif]">{failedCount} failed</span>
@@ -119,45 +128,78 @@ function JobCard({ job }: { job: WireJob }) {
         <ChevronDown size={14} className={`flex-shrink-0 text-[#4A3935]/30 mt-1 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {/* Subtask list */}
-      {open && job.tasks.length > 0 && (
+      {/* Contribution list */}
+      {open && (
         <div className="border-t border-[#120B09]/5">
           <div className="grid grid-cols-12 gap-3 px-5 py-2 bg-[#F5F1EE]">
-            {["Subtask", "Status", "Worker", "Progress", "Duration"].map((h, i) => (
-              <p key={h} className={`text-[8px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif] ${i === 0 ? "col-span-4" : i === 1 ? "col-span-2" : i === 2 ? "col-span-2" : i === 3 ? "col-span-2" : "col-span-2"}`}>{h}</p>
+            {["Worker", "Tasks", "Compute", "Work Done", "Carbon"].map((h, i) => (
+              <p key={h} className={`text-[8px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif] ${i === 0 ? "col-span-3" : i === 1 ? "col-span-2" : i === 2 ? "col-span-2" : i === 3 ? "col-span-3" : "col-span-2"}`}>{h}</p>
             ))}
           </div>
-          {job.tasks.map((task) => {
-            const dur = task.completedAt && task.startedAt ? task.completedAt - task.startedAt : null;
-            return (
-              <div key={task.id} className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all">
-                <div className="col-span-4 flex items-center gap-2">
-                  <TaskIcon status={task.status} />
-                  <span className="text-xs font-medium text-[#120B09] truncate">{task.title}</span>
-                </div>
-                <div className="col-span-2">
-                  <TaskStatusBadge status={task.status} />
-                </div>
-                <div className="col-span-2">
-                  {task.assignedWorkerId ? (
-                    <span className="text-[9px] font-black text-[#EF8354] font-[Inter,sans-serif] uppercase">
-                      assigned
-                    </span>
-                  ) : (
-                    <span className="text-[9px] text-[#4A3935]/30 font-[Inter,sans-serif]">—</span>
-                  )}
-                </div>
-                <div className="col-span-2">
-                  <ProgressBar value={task.progress} height="sm" />
-                </div>
-                <div className="col-span-2 text-right">
-                  <span className="text-[9px] text-[#4A3935]/50 font-[Inter,sans-serif]">
-                    {dur ? formatDuration(dur) : task.status === "running" ? "…" : "—"}
-                  </span>
-                </div>
+          {contributions.length > 0 ? contributions.map((entry) => (
+            <div key={entry.workerId} className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all">
+              <div className="col-span-3">
+                <span className="text-xs font-black text-[#120B09]">{entry.workerName}</span>
               </div>
-            );
-          })}
+              <div className="col-span-2">
+                <span className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif]">
+                  {entry.tasksCompleted}
+                </span>
+              </div>
+              <div className="col-span-2">
+                <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                  {formatDuration(entry.totalDurationMs)}
+                </span>
+              </div>
+              <div className="col-span-3">
+                <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                  {entry.pixelsRendered > 0
+                    ? `${entry.pixelsRendered.toLocaleString()} px`
+                    : `${entry.opsCount.toLocaleString()} ops`}
+                </span>
+              </div>
+              <div className="col-span-2 text-right">
+                <span className={`text-[10px] font-black font-[Inter,sans-serif] ${entry.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
+                  {formatCarbonSaved(entry.carbonSavedGrams)}
+                </span>
+              </div>
+            </div>
+          )) : job.tasks.length > 0 ? (
+            job.tasks.map((task) => {
+              const dur = task.completedAt && task.startedAt ? task.completedAt - task.startedAt : null;
+              const taskCarbonSaved = getTaskCarbonSavedGrams(task);
+              return (
+                <div key={task.id} className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all">
+                  <div className="col-span-3 flex items-center gap-2">
+                    <TaskIcon status={task.status} />
+                    <span className="text-xs font-medium text-[#120B09] truncate">{task.title}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <TaskStatusBadge status={task.status} />
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                      {dur ? formatDuration(dur) : "—"}
+                    </span>
+                  </div>
+                  <div className="col-span-3">
+                    <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif]">
+                      {task.completedByWorkerName ?? task.assignedWorkerId ?? "—"}
+                    </span>
+                  </div>
+                  <div className="col-span-2 text-right">
+                    <span className={`text-[10px] font-black font-[Inter,sans-serif] ${taskCarbonSaved >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
+                      {formatCarbonSaved(taskCarbonSaved)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="px-5 py-3 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
+              No contribution details yet.
+            </div>
+          )}
         </div>
       )}
 
@@ -166,6 +208,13 @@ function JobCard({ job }: { job: WireJob }) {
         <div className="border-t border-[#120B09]/5 px-5 py-4 bg-[#FAFAF8]">
           <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">Result</p>
           <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
+          <p className="text-[10px] font-black text-green-700 font-[Inter,sans-serif] mt-2">
+            Net carbon saved: {formatCarbonSaved(
+              typeof job.result.metrics.netCarbonSavedGrams === "number"
+                ? job.result.metrics.netCarbonSavedGrams
+                : carbonSaved
+            )}
+          </p>
         </div>
       )}
     </div>
@@ -175,15 +224,31 @@ function JobCard({ job }: { job: WireJob }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TasksPage() {
-  const { jobs, submitJob, isConnected } = useHostSession();
+  const { jobs, submitJob, isConnected, session } = useHostSession();
   const [command, setCommand] = useState("");
   const [filter, setFilter] = useState<"all" | "running" | "completed" | "queued">("all");
+  const [isDumping, setIsDumping] = useState(false);
 
-  const allTasks = useMemo(() => jobs.flatMap((j) => j.tasks), [jobs]);
+  const activeTasks = useMemo(() => jobs.flatMap((job) => job.tasks), [jobs]);
+  const allTasks = useMemo(() => jobs.reduce((sum, job) => sum + job.totalTasks, 0), [jobs]);
   const completedJobs = useMemo(() => jobs.filter((j) => j.status === "completed"), [jobs]);
   const runningJobs = useMemo(() => jobs.filter((j) => j.status === "running" || j.status === "decomposing" || j.status === "reducing"), [jobs]);
   const avgDur = useMemo(() => avgTaskDuration(jobs), [jobs]);
   const sr = useMemo(() => successRate(jobs), [jobs]);
+  const totalCarbonSaved = useMemo(
+    () => jobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
+    [jobs]
+  );
+  const taskStatusTotals = useMemo(
+    () => ({
+      completed: jobs.reduce((sum, job) => sum + job.completedTasks, 0),
+      failed: jobs.reduce((sum, job) => sum + job.failedTasks, 0),
+      running: activeTasks.filter((task) => task.status === "running").length,
+      assigned: activeTasks.filter((task) => task.status === "assigned").length,
+      queued: activeTasks.filter((task) => task.status === "queued").length,
+    }),
+    [activeTasks, jobs]
+  );
 
   // Job type distribution
   const typeDistribution = useMemo(() => {
@@ -196,10 +261,16 @@ export default function TasksPage() {
 
   // Filtered jobs
   const filtered = useMemo(() => {
-    if (filter === "all") return jobs;
-    if (filter === "running") return jobs.filter((j) => j.status === "running" || j.status === "decomposing" || j.status === "reducing");
-    if (filter === "completed") return jobs.filter((j) => j.status === "completed");
-    return jobs.filter((j) => j.status === "queued");
+    const base =
+      filter === "all"
+        ? jobs
+        : filter === "running"
+        ? jobs.filter((j) => j.status === "running" || j.status === "decomposing" || j.status === "reducing")
+        : filter === "completed"
+        ? jobs.filter((j) => j.status === "completed")
+        : jobs.filter((j) => j.status === "queued");
+
+    return [...base].sort((a, b) => b.createdAt - a.createdAt);
   }, [jobs, filter]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -207,6 +278,32 @@ export default function TasksPage() {
     if (!command.trim()) return;
     submitJob(command);
     setCommand("");
+  };
+
+  const handleDumpSession = async () => {
+    if (!session?.code || isDumping) return;
+    setIsDumping(true);
+
+    try {
+      const response = await fetch(`/api/session-dump/${session.code}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to export session dump");
+      }
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${session.code}-mongo-dump.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("[tasks] session dump failed", error);
+    } finally {
+      setIsDumping(false);
+    }
   };
 
   return (
@@ -224,9 +321,20 @@ export default function TasksPage() {
               <span className="text-[10px] font-black uppercase tracking-[0.3em] text-[#EF8354] font-[Inter,sans-serif] block mb-2">Workload Orchestration</span>
               <h1 className="text-5xl font-black text-[#120B09] tracking-tighter uppercase">Task Queue</h1>
               <p className="text-[#4A3950]/50 text-xs font-bold uppercase tracking-widest mt-2 font-[Inter,sans-serif]">
-                {jobs.length} job{jobs.length !== 1 ? "s" : ""} · {allTasks.length} subtasks
+                {jobs.length} job{jobs.length !== 1 ? "s" : ""} · {allTasks} subtasks
+              </p>
+              <p className="text-green-700 text-xs font-bold uppercase tracking-widest mt-1 font-[Inter,sans-serif]">
+                Net carbon saved: {formatCarbonSaved(totalCarbonSaved)}
               </p>
             </div>
+            <button
+              onClick={handleDumpSession}
+              disabled={!session?.code || isDumping}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-[#120B09]/8 text-[#120B09] font-black text-[10px] uppercase tracking-widest rounded-sm hover:border-[#EF8354]/30 hover:text-[#EF8354] transition-all disabled:opacity-40 disabled:cursor-not-allowed font-[Inter,sans-serif]"
+            >
+              <Download size={12} />
+              {isDumping ? "Exporting…" : "Dump Session DB"}
+            </button>
           </div>
         </header>
 
@@ -251,8 +359,8 @@ export default function TasksPage() {
         {/* Stat cards */}
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
           {[
-            { label: "Total Jobs", value: String(jobs.length), sub: `${allTasks.length} subtasks total`, icon: ListTodo, accent: "text-[#6f0600]" },
-            { label: "Running Now", value: String(runningJobs.length), sub: `${allTasks.filter(t => t.status === "running").length} tasks active`, icon: Activity, accent: "text-[#EF8354]" },
+            { label: "Total Jobs", value: String(jobs.length), sub: `${allTasks} subtasks total`, icon: ListTodo, accent: "text-[#6f0600]" },
+            { label: "Running Now", value: String(runningJobs.length), sub: `${taskStatusTotals.running} tasks active`, icon: Activity, accent: "text-[#EF8354]" },
             { label: "Avg Task Time", value: avgDur ? formatDuration(avgDur) : "—", sub: "Per subtask completion", icon: Clock, accent: "text-[#EF8354]" },
             { label: "Success Rate", value: `${sr}%`, sub: `${completedJobs.length} jobs completed`, icon: CheckCircle2, accent: sr >= 95 ? "text-green-700" : sr >= 80 ? "text-amber-600" : "text-[#BA1A1A]" },
           ].map(({ label, value, sub, icon: Icon, accent }) => (
@@ -309,8 +417,8 @@ export default function TasksPage() {
                 <h3 className="text-xs font-black uppercase tracking-wider text-[#120B09]">Task Status Totals</h3>
               </div>
               {(["completed", "running", "assigned", "queued", "failed"] as const).map((s) => {
-                const count = allTasks.filter((t) => t.status === s).length;
-                const pct = allTasks.length ? Math.round((count / allTasks.length) * 100) : 0;
+                const count = taskStatusTotals[s];
+                const pct = allTasks ? Math.round((count / allTasks) * 100) : 0;
                 const colors: Record<string, string> = {
                   completed: "bg-green-500", running: "bg-[#EF8354]",
                   assigned: "bg-[#EF8354]/60", queued: "bg-[#EDE7E3]", failed: "bg-[#BA1A1A]",
@@ -336,10 +444,10 @@ export default function TasksPage() {
               </div>
               <div className="space-y-4">
                 {[
-                  { label: "Avg subtasks / job", value: jobs.length ? (allTasks.length / jobs.length).toFixed(1) : "—" },
+                  { label: "Avg subtasks / job", value: jobs.length ? (allTasks / jobs.length).toFixed(1) : "—" },
                   { label: "Tasks per worker", value: "—" },
-                  { label: "Peak concurrent", value: String(Math.min(allTasks.filter(t => t.status !== "queued").length, allTasks.length)) },
-                  { label: "Failed tasks", value: String(allTasks.filter(t => t.status === "failed").length) },
+                  { label: "Peak concurrent", value: String(taskStatusTotals.running + taskStatusTotals.assigned) },
+                  { label: "Failed tasks", value: String(taskStatusTotals.failed) },
                 ].map(({ label, value }) => (
                   <div key={label} className="flex justify-between items-center py-2 border-b border-[#120B09]/5 last:border-0">
                     <span className="text-[10px] text-[#4A3935]/60 font-[Inter,sans-serif] font-bold">{label}</span>

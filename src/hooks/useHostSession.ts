@@ -13,6 +13,7 @@ import type {
 } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
 import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
+import { executeK2InferenceTask } from "@/lib/inference-client";
 
 // ─── Public state shape ───────────────────────────────────────────────────────
 
@@ -23,10 +24,14 @@ export interface HostSessionState {
   jobs: WireJob[];
   fractalTiles: FractalTileResultPayload[];
   latestResult: WireResult | null;
+  schedulerBias: number;
   submitJob: (command: string) => void;
   submitFractalJob: (config: FractalJobConfig) => void;
+  setSchedulerBias: (bias: number) => void;
   reconnect: () => void;
 }
+
+const HOST_SESSION_STORAGE_KEY = "clementine:host-session-code";
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -40,9 +45,14 @@ export function useHostSession(): HostSessionState {
   const [jobs, setJobs] = useState<WireJob[]>([]);
   const [fractalTiles, setFractalTiles] = useState<FractalTileResultPayload[]>([]);
   const [latestResult, setLatestResult] = useState<WireResult | null>(null);
+  const [schedulerBias, setSchedulerBiasState] = useState(0.5);
 
   // Persist session code across reconnects
-  const sessionCodeRef = useRef<string | undefined>(undefined);
+  const sessionCodeRef = useRef<string | undefined>(
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(HOST_SESSION_STORAGE_KEY) ?? undefined
+      : undefined
+  );
   // Prevent double-executing assigned tasks (Strict Mode)
   const executingTaskRef = useRef<string | null>(null);
   const hostProfileSentRef = useRef<string | null>(null);
@@ -63,6 +73,11 @@ export function useHostSession(): HostSessionState {
         });
         socket.emit("task:progress", { taskId: task.id, progress: 100 });
         socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
+      } else if (task.jobType === "batch-inference" || task.jobType === "llm-analysis") {
+        socket.emit("task:progress", { taskId: task.id, progress: 15 });
+        const output = await executeK2InferenceTask(task);
+        socket.emit("task:progress", { taskId: task.id, progress: 100 });
+        socket.emit("task:complete", { taskId: task.id, output });
       } else {
         // Mock compute for other job types
         const complexity = typeof task.inputPayload.complexity === "number" ? task.inputPayload.complexity : 2;
@@ -107,7 +122,11 @@ export function useHostSession(): HostSessionState {
     // Initial state snapshot
     socket.on("session:state", ({ session: sess, workers: ws, jobs: js }) => {
       sessionCodeRef.current = sess.code;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(HOST_SESSION_STORAGE_KEY, sess.code);
+      }
       setSession(sess);
+      setSchedulerBiasState(sess.schedulerBias);
       setWorkers(ws);
       setJobs(js);
       setFractalTiles([]);
@@ -207,11 +226,17 @@ export function useHostSession(): HostSessionState {
 
   const submitJob = useCallback((command: string) => {
     if (!command.trim()) return;
-    getSocket().emit("job:submit", { command: command.trim() });
+    getSocket().emit("job:submit", {
+      command: command.trim(),
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
 
   const submitFractalJob = useCallback((config: FractalJobConfig) => {
-    getSocket().emit("fractal:submit", config);
+    getSocket().emit("fractal:submit", {
+      config,
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
 
   const reconnect = useCallback(() => {
@@ -219,5 +244,31 @@ export function useHostSession(): HostSessionState {
     if (!socket.connected) socket.connect();
   }, []);
 
-  return { isConnected, session, workers, jobs, fractalTiles, latestResult, submitJob, submitFractalJob, reconnect };
+  const setSchedulerBias = useCallback((bias: number) => {
+    const normalizedBias = Math.min(Math.max(bias, 0), 1);
+    setSchedulerBiasState(normalizedBias);
+    setSession((prev) => (prev ? { ...prev, schedulerBias: normalizedBias } : prev));
+
+    const currentSessionCode = sessionCodeRef.current;
+    if (!currentSessionCode) return;
+
+    getSocket().emit("scheduler:bias:set", {
+      sessionCode: currentSessionCode,
+      bias: normalizedBias,
+    });
+  }, []);
+
+  return {
+    isConnected,
+    session,
+    workers,
+    jobs,
+    fractalTiles,
+    latestResult,
+    schedulerBias,
+    submitJob,
+    submitFractalJob,
+    setSchedulerBias,
+    reconnect,
+  };
 }

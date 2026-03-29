@@ -1,14 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Cpu, ListTodo, Users, Activity, QrCode, Settings, Zap } from "lucide-react";
+import { LayoutDashboard, ListTodo, Users, QrCode, Settings, Zap } from "lucide-react";
 
 const navItems = [
   { path: "/host", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { path: "/host/workers", label: "Workers", icon: Users, exact: false },
   { path: "/host/tasks", label: "Task Queue", icon: ListTodo, exact: false },
-  { path: "/host#activity", label: "Activity", icon: Activity, exact: false },
-  { path: "/host#compute", label: "Compute", icon: Cpu, exact: false },
 ];
 
 export function Sidebar() {
