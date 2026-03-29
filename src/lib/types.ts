@@ -43,6 +43,15 @@ export interface Job {
   completedAt?: string;
   estimatedCarbonSavedGrams?: number;
   subtasks: SubTask[];
+  workerContributions?: Array<{
+    workerId: string;
+    workerName: string;
+    tasksCompleted: number;
+    totalDurationMs: number;
+    opsCount: number;
+    pixelsRendered: number;
+    carbonSavedGrams: number;
+  }>;
   result?: JobResult;
 }
 

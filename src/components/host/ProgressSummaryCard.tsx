@@ -9,8 +9,8 @@ interface ProgressSummaryCardProps {
 
 export function ProgressSummaryCard({ job }: ProgressSummaryCardProps) {
   const runningSubtasks = job.subtasks.filter((t) => t.status === "running").length;
-  const completedSubtasks = job.subtasks.filter((t) => t.status === "completed").length;
-  const queuedSubtasks = job.subtasks.filter((t) => t.status === "queued" || t.status === "assigned").length;
+  const completedSubtasks = job.completedSubtasks;
+  const queuedSubtasks = Math.max(job.totalSubtasks - job.completedSubtasks - runningSubtasks - job.failedSubtasks, 0);
 
   return (
     <div className="bg-white border border-[#120B09]/5 shadow-sm rounded-sm p-6 hover:border-[#EF8354]/20 transition-all">

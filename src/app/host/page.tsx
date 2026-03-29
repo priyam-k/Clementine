@@ -43,9 +43,9 @@ function buildFractalConfig(difficulty: number): FractalJobConfig {
 // ─── Wire → component type adapters ──────────────────────────────────────────
 
 function wireJobToComp(j: WireJob & { progress?: number }): Job {
-  const totalSubtasks = j.tasks.length;
-  const completedSubtasks = j.tasks.filter((t) => t.status === "completed").length;
-  const failedSubtasks = j.tasks.filter((t) => t.status === "failed").length;
+  const totalSubtasks = j.totalTasks;
+  const completedSubtasks = j.completedTasks;
+  const failedSubtasks = j.failedTasks;
   const runningProgress =
     totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
 
@@ -82,6 +82,7 @@ function wireJobToComp(j: WireJob & { progress?: number }): Job {
       startedAt: t.startedAt ? new Date(t.startedAt).toISOString() : undefined,
       completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : undefined,
     })),
+    workerContributions: j.workerContributions,
     result: j.result
       ? {
           summary: j.result.summary,
@@ -130,7 +131,11 @@ export default function HostPage() {
   const fractalConfig = useMemo(() => buildFractalConfig(difficulty), [difficulty]);
 
   // Adapt wire types to component prop shapes
-  const compJobs = useMemo(() => jobs.map(wireJobToComp), [jobs]);
+  const sortedJobs = useMemo(
+    () => [...jobs].sort((a, b) => b.createdAt - a.createdAt),
+    [jobs]
+  );
+  const compJobs = useMemo(() => sortedJobs.map(wireJobToComp), [sortedJobs]);
   const compSession = useMemo(
     () =>
       session
@@ -150,8 +155,8 @@ export default function HostPage() {
   const activeWorkers = workers.filter((w) => w.status !== "offline");
   const runningJobs = compJobs.filter((j) => j.status === "running");
   const totalCarbonSavedGrams = useMemo(
-    () => jobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
-    [jobs]
+    () => sortedJobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
+    [sortedJobs]
   );
 
   const activeJob = runningJobs.filter((j) => j.id !== jobs.find(j2 => j2.jobType === "fractal-render")?.id)[0] ?? null;
@@ -159,15 +164,15 @@ export default function HostPage() {
 
   // Active fractal job (most recent fractal-render, running or completed)
   const fractalJob = useMemo(
-    () => jobs.find((j) => j.jobType === "fractal-render" && (j.status !== "queued")) ?? null,
-    [jobs]
+    () => sortedJobs.find((j) => j.jobType === "fractal-render" && (j.status !== "queued")) ?? null,
+    [sortedJobs]
   );
   const isFractalRunning = fractalJob?.status === "running" || fractalJob?.status === "decomposing" || fractalJob?.status === "reducing";
 
   // Build command history from jobs
   const commandHistory: CommandEntry[] = useMemo(
     () =>
-      jobs.map((j) => ({
+      sortedJobs.map((j) => ({
         id: j.id,
         text: j.rawPrompt,
         timestamp: new Date(j.createdAt).toISOString(),
@@ -181,7 +186,7 @@ export default function HostPage() {
             : "dispatched",
         jobId: j.id,
       })),
-    [jobs]
+    [sortedJobs]
   );
 
   const statCards = [

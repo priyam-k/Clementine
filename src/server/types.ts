@@ -9,6 +9,7 @@ import type {
   FractalJobConfig,
   WorkerTelemetry,
   WorkerBenchmark,
+  WorkerContribution,
 } from "../lib/shared-types";
 
 export interface ServerWorker {
@@ -71,6 +72,15 @@ export interface ServerJob {
   startedAt?: number;
   completedAt?: number;
   taskIds: string[];
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  totalOps: number;
+  totalDataProcessed: number;
+  totalCarbonSavedGrams: number;
+  workerIdsUsed: string[];
+  completionSamples: string[];
+  workerContributions: WorkerContribution[];
   result?: WireResult;
   sessionCode: string;
   fractalConfig?: FractalJobConfig;

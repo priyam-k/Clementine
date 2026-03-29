@@ -196,6 +196,15 @@ export function createJob(data: {
     status: "queued",
     createdAt: Date.now(),
     taskIds: [],
+    totalTasks: 0,
+    completedTasks: 0,
+    failedTasks: 0,
+    totalOps: 0,
+    totalDataProcessed: 0,
+    totalCarbonSavedGrams: 0,
+    workerIdsUsed: [],
+    completionSamples: [],
+    workerContributions: [],
     sessionCode: data.sessionCode,
     fractalConfig: data.fractalConfig,
   };
@@ -245,6 +254,10 @@ export function updateTask(id: string, updates: Partial<ServerTask>): ServerTask
   const updated = { ...t, ...updates };
   tasks.set(id, updated);
   return updated;
+}
+
+export function deleteTask(id: string): boolean {
+  return tasks.delete(id);
 }
 
 // ─── Wire serializers ─────────────────────────────────────────────────────────
@@ -330,9 +343,9 @@ export function toWireTask(t: ServerTask): WireTask {
 
 export function toWireJob(j: ServerJob): WireJob {
   const jobTasks = getTasksForJob(j.id).map(toWireTask);
-  const completedCount = jobTasks.filter((t) => t.status === "completed").length;
+  const completedCount = j.completedTasks;
   const progress =
-    jobTasks.length > 0 ? Math.round((completedCount / jobTasks.length) * 100) : 0;
+    j.totalTasks > 0 ? Math.round((completedCount / j.totalTasks) * 100) : 0;
 
   return {
     id: j.id,
@@ -344,6 +357,10 @@ export function toWireJob(j: ServerJob): WireJob {
     startedAt: j.startedAt,
     completedAt: j.completedAt,
     tasks: jobTasks,
+    totalTasks: j.totalTasks,
+    completedTasks: j.completedTasks,
+    failedTasks: j.failedTasks,
+    workerContributions: j.workerContributions,
     result: j.result,
     // Attach computed progress as a non-standard field the client can use
     ...(({ progress } as unknown) as Record<string, unknown>),

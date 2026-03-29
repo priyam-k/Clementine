@@ -8,6 +8,13 @@ import { formatRelativeTime } from "@/lib/mock-data";
 import { useState } from "react";
 import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
 interface TaskQueuePanelProps {
   jobs: Job[];
 }
@@ -39,6 +46,7 @@ function SubTaskRow({ task }: { task: SubTask }) {
 
 function JobRow({ job }: { job: Job }) {
   const [expanded, setExpanded] = useState(job.status === "running");
+  const contributions = job.workerContributions ?? [];
 
   return (
     <div className={`border rounded-sm transition-all ${job.status === "running" ? "border-[#EF8354]/30 bg-white" : "border-[#120B09]/5 bg-white"}`}>
@@ -81,14 +89,37 @@ function JobRow({ job }: { job: Job }) {
       </button>
 
       {/* Subtasks */}
-      {expanded && job.subtasks.length > 0 && (
+      {expanded && (
         <div className="border-t border-[#120B09]/5 px-3 pb-3">
           <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#4A3935]/40 font-[Inter,sans-serif] px-3 pt-3 pb-1">
-            Subtasks
+            Node Contribution
           </p>
-          {job.subtasks.map((t) => (
-            <SubTaskRow key={t.id} task={t} />
-          ))}
+          {contributions.length > 0 ? (
+            contributions.map((entry) => (
+              <div key={entry.workerId} className="flex items-center gap-3 py-2 px-3 rounded-sm hover:bg-[#F5F1EE] transition-all">
+                <div className="w-8 h-8 rounded-full bg-[#F5F1EE] flex items-center justify-center text-[10px] font-black text-[#6f0600]">
+                  {entry.workerName[0] ?? "W"}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-[#120B09] truncate">{entry.workerName}</p>
+                  <p className="text-[10px] text-[#4A3935]/45 font-[Inter,sans-serif]">
+                    {entry.tasksCompleted} tasks · {formatDuration(entry.totalDurationMs)} compute · {formatCarbonSaved(entry.carbonSavedGrams)} saved
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-[#EF8354] font-[Inter,sans-serif]">
+                    {entry.pixelsRendered > 0 ? `${Math.round(entry.pixelsRendered / 1000)}k px` : `${entry.opsCount.toLocaleString()} ops`}
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : job.subtasks.length > 0 ? (
+            job.subtasks.map((t) => <SubTaskRow key={t.id} task={t} />)
+          ) : (
+            <div className="px-3 py-3 text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">
+              Waiting for node contribution data…
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -96,6 +127,10 @@ function JobRow({ job }: { job: Job }) {
 }
 
 export function TaskQueuePanel({ jobs }: TaskQueuePanelProps) {
+  const sortedJobs = [...jobs].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
   return (
     <section id="tasks">
       <div className="flex items-end justify-between mb-6">
@@ -122,7 +157,7 @@ export function TaskQueuePanel({ jobs }: TaskQueuePanelProps) {
       </div>
 
       <div className="space-y-3">
-        {jobs.map((job) => (
+        {sortedJobs.map((job) => (
           <JobRow key={job.id} job={job} />
         ))}
       </div>

@@ -107,6 +107,16 @@ export interface WireTask {
   progress: number;
 }
 
+export interface WorkerContribution {
+  workerId: string;
+  workerName: string;
+  tasksCompleted: number;
+  totalDurationMs: number;
+  opsCount: number;
+  pixelsRendered: number;
+  carbonSavedGrams: number;
+}
+
 export interface WireJob {
   id: string;
   title: string;
@@ -117,6 +127,10 @@ export interface WireJob {
   startedAt?: number;
   completedAt?: number;
   tasks: WireTask[];
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  workerContributions: WorkerContribution[];
   result?: WireResult;
 }
 
