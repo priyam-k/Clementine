@@ -2,6 +2,124 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Mic, MicOff, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 
+// ─── Waveform canvas ──────────────────────────────────────────────────────────
+
+const NUM_BARS = 32
+
+function WaveformCanvas({ active }: { active: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const rafRef = useRef<number>(0)
+
+  // Animation loop — runs always; uses real data when active, idle sine when not
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+
+    const W = rect.width
+    const H = rect.height
+
+    let frame = 0
+
+    const draw = () => {
+      rafRef.current = requestAnimationFrame(draw)
+      frame++
+
+      ctx.clearRect(0, 0, W, H)
+
+      const analyser = analyserRef.current
+      const totalSlot = W / NUM_BARS
+      const barW = totalSlot * 0.52
+      const offsetX = (totalSlot - barW) / 2
+
+      for (let i = 0; i < NUM_BARS; i++) {
+        let value: number
+
+        if (analyser) {
+          const data = new Uint8Array(analyser.frequencyBinCount)
+          analyser.getByteFrequencyData(data)
+          const step = Math.floor(data.length / NUM_BARS)
+          value = data[i * step] / 255
+        } else {
+          // Gentle idle wave — subtle ripple across bars
+          const t = frame / 60
+          value = 0.05 + 0.045 * Math.abs(Math.sin(t * 1.2 + i * 0.38))
+        }
+
+        const barH = Math.max(2, value * H * 0.88)
+        const x = i * totalSlot + offsetX
+        const y = (H - barH) / 2
+        const alpha = active ? 0.3 + value * 0.7 : 0.18 + value * 0.25
+
+        ctx.fillStyle = `rgba(239, 131, 84, ${alpha})`
+        ctx.beginPath()
+        if (ctx.roundRect) {
+          ctx.roundRect(x, y, barW, barH, 1.5)
+        } else {
+          ctx.rect(x, y, barW, barH)
+        }
+        ctx.fill()
+      }
+    }
+
+    draw()
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [active])
+
+  // Start / stop real audio capture
+  useEffect(() => {
+    if (!active) {
+      analyserRef.current = null
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+      audioCtxRef.current?.close()
+      audioCtxRef.current = null
+      return
+    }
+
+    let cancelled = false
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      .then(stream => {
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        streamRef.current = stream
+        const audioCtx = new AudioContext()
+        audioCtxRef.current = audioCtx
+        const analyser = audioCtx.createAnalyser()
+        analyser.fftSize = 128
+        analyser.smoothingTimeConstant = 0.78
+        audioCtx.createMediaStreamSource(stream).connect(analyser)
+        analyserRef.current = analyser
+      })
+      .catch(() => { /* mic denied — idle animation continues */ })
+
+    return () => {
+      cancelled = true
+      analyserRef.current = null
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+      audioCtxRef.current?.close().catch(() => {})
+      audioCtxRef.current = null
+    }
+  }, [active])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: '100%', height: '100%', display: 'block' }}
+    />
+  )
+}
+
 type VoiceState = "idle" | "listening" | "transcribing" | "ready" | "unsupported";
 
 interface VoiceCommandCardProps {
@@ -188,8 +306,13 @@ export function VoiceCommandCard({ onTranscript }: VoiceCommandCardProps) {
         </span>
       </div>
 
+      {/* Waveform visualizer */}
+      <div className="h-12 mb-1 -mx-1">
+        <WaveformCanvas active={voiceState === "listening"} />
+      </div>
+
       {/* Mic button */}
-      <div className="flex justify-center my-5">
+      <div className="flex justify-center my-4">
         <div className="relative flex items-center justify-center">
           {voiceState === "listening" && (
             <>
