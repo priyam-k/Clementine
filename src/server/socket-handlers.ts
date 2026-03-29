@@ -5,6 +5,7 @@ import type {
   FractalJobConfig,
   FractalTileInput,
   FractalTileOutput,
+  EnterpriseBenchmarkConfig,
 } from "../lib/shared-types";
 import {
   createSession,
@@ -31,16 +32,28 @@ import {
   updateSessionHostSocket,
   updateSessionSchedulerBias,
   rebindWorkerSocket,
+  appendJobArtifact,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
 import { reduceJobResults } from "./reducer";
+import { runJobGraph } from "./job-graph";
+import { executionBridges } from "./graph-nodes";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
 import { persistJobSnapshot, persistWorkerSnapshots } from "./mongo";
 import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
 import { handleWorkerJoin, type Worker as SchedulerWorker } from "./taskScheduler";
 import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
+import {
+  buildEnterpriseResultSummary,
+  buildEnterpriseTaskPayload,
+  createEnterpriseMarkdownArtifact,
+  decomposeEnterpriseAnalysis,
+  generateVendorProfiles,
+  synthesizeEnterpriseMarkdown,
+} from "./enterprise-benchmark";
+import { createJobResultArtifact } from "./results-writer";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -248,7 +261,7 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Job submitted (text command) ──────────────────────────────────────────
-    socket.on("job:submit", ({ command, sessionCode }) => {
+    socket.on("job:submit", ({ command, sessionCode, benchmarkConfig }) => {
       const session =
         getSessionByHostSocket(socket.id)
         ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
@@ -257,8 +270,15 @@ export function setupSocketHandlers(io: IO, port: number) {
         return;
       }
 
-      const jobType = detectJobType(command);
-      const title = deriveTitle(command, jobType);
+      const resolvedBenchmarkConfig = normalizeBenchmarkConfig(benchmarkConfig);
+      const jobType = resolvedBenchmarkConfig ? "enterprise-analysis" : detectJobType(command);
+      const title = resolvedBenchmarkConfig
+        ? `Enterprise Vendor Risk & Selection — ${resolvedBenchmarkConfig.vendorCount} Vendors`
+        : deriveTitle(command, jobType);
+      const vendorProfiles =
+        resolvedBenchmarkConfig
+          ? generateVendorProfiles(resolvedBenchmarkConfig, `${session.code}:${command}`)
+          : undefined;
 
       const job = createJob({
         rawPrompt: command,
@@ -266,6 +286,8 @@ export function setupSocketHandlers(io: IO, port: number) {
         jobType,
         title,
         sessionCode: session.code,
+        benchmarkConfig: resolvedBenchmarkConfig,
+        vendorProfiles,
       });
 
       console.log(`[job] Created "${title}" (${jobType}) for session ${session.code}`);
@@ -274,60 +296,23 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Send initial job to host
       socket.emit("job:created", toWireJob(job));
 
+      // Hand off to LangGraph orchestration (decompose → schedule → execute → reduce)
       (async () => {
         try {
-          updateJob(job.id, { status: "decomposing" });
-          persistJobAndWorkers(job.id);
-          socket.emit("job:update", toWireJob(getJob(job.id)!));
-
-          const llmDecomposition = await decomposeWithLLM(command);
-
-          if (llmDecomposition?.tasks?.length) {
-            const taskIds = llmDecomposition.tasks.map((spec) =>
-              createTask({
-                jobId: job.id,
-                title: spec.title,
-                description: spec.description,
-                jobType: job.jobType,
-                status: "queued",
-                progress: 0,
-                inputPayload: {
-                  batchSize: Math.floor(1000 + spec.complexity * 1500),
-                  complexity: spec.complexity,
-                  operationType: job.jobType,
-                  dataLabel: spec.dataLabel ?? llmDecomposition.jobTitle,
-                  estimatedSeconds: spec.estimatedSeconds,
-                  seed: Math.floor(Math.random() * 100000),
-                },
-              }).id
-            );
-
-            updateJob(job.id, {
-              title: llmDecomposition.jobTitle,
-              taskIds,
-              totalTasks: taskIds.length,
-              completedTasks: 0,
-              failedTasks: 0,
-              normalizedCommand: JSON.stringify({
-                original: command,
-                resultSummaryHint: llmDecomposition.resultSummaryHint,
-              }),
-            });
-
-            console.log(
-              `[job] LLM produced ${taskIds.length} tasks for "${llmDecomposition.jobTitle}"`
-            );
-          } else {
-            const tasks = decomposeJob(getJob(job.id)!);
-            console.log(`[job] Heuristic decomposition created ${tasks.length} tasks`);
-          }
-
-          updateJob(job.id, { status: "running", startedAt: Date.now() });
-          persistJobAndWorkers(job.id);
-          socket.emit("job:update", toWireJob(getJob(job.id)!));
-          runScheduler(io, session.code, socket.id);
+          await runJobGraph(io, {
+            command,
+            ctx: {
+              jobId: job.id,
+              sessionCode: session.code,
+              hostSocketId: socket.id,
+            },
+            decomposition: null,
+            taskIds: [],
+            taskResults: {},
+            finalSummary: "",
+          });
         } catch (err) {
-          console.error(`[job] orchestration failed for ${job.id}:`, err);
+          console.error(`[job-graph] job ${job.id} failed:`, err);
           updateJob(job.id, { status: "failed" });
           persistJobAndWorkers(job.id);
           socket.emit("job:update", toWireJob(getJob(job.id)!));
@@ -456,15 +441,27 @@ export function setupSocketHandlers(io: IO, port: number) {
 
       const task = getTask(taskId)!;
       const job = getJob(task.jobId)!;
+      const assignedVendorCount = Array.isArray(task.inputPayload.assignedVendors)
+        ? task.inputPayload.assignedVendors.length
+        : 0;
+      const criteriaCount = Array.isArray(task.inputPayload.criteria)
+        ? task.inputPayload.criteria.length
+        : 0;
       const opsCount =
-        typeof storedOutput?.opsCount === "number" ? storedOutput.opsCount : 0;
+        typeof storedOutput?.opsCount === "number"
+          ? storedOutput.opsCount
+          : task.jobType === "enterprise-analysis"
+          ? Math.max(assignedVendorCount * Math.max(criteriaCount, 1) * 12, assignedVendorCount)
+          : 0;
       const batchSize =
-        typeof task.inputPayload.batchSize === "number" ? task.inputPayload.batchSize : 0;
+        typeof task.inputPayload.batchSize === "number"
+          ? task.inputPayload.batchSize
+          : assignedVendorCount;
       const completionSample = summarizeTaskOutput(task);
       const workerIdsUsed = job.workerIdsUsed.includes(worker.id)
         ? job.workerIdsUsed
         : [...job.workerIdsUsed, worker.id];
-      const completionSamples = [...job.completionSamples, completionSample].slice(-8);
+      const completionSamples = [...job.completionSamples, completionSample].slice(-24);
       const existingContribution =
         job.workerContributions.find((entry) => entry.workerId === worker.id) ?? null;
       const nextContribution = {
@@ -526,18 +523,45 @@ export function setupSocketHandlers(io: IO, port: number) {
 
         if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
 
+        const bridgeResolve = executionBridges.get(job.id);
+        if (bridgeResolve) {
+          bridgeResolve();
+          return;
+        }
+
         (async () => {
           await new Promise<void>((r) => setTimeout(r, 400));
           const finalJob = getJob(updatedJob.id)!;
           const finalTasks = getTasksForJob(updatedJob.id);
           const result = reduceJobResults(finalJob, finalTasks);
 
-          if (finalJob.jobType !== "fractal-render") {
+          if (finalJob.jobType === "enterprise-analysis") {
+            try {
+              const markdown = await synthesizeEnterpriseMarkdown(
+                finalJob,
+                finalJob.vendorProfiles ?? [],
+                finalJob.completionSamples
+              );
+              const artifact = await createEnterpriseMarkdownArtifact(finalJob, markdown);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              result.summary = buildEnterpriseResultSummary(markdown);
+              result.outputLines = markdown
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 12);
+              result.metrics.artifactType = "markdown";
+              result.metrics.vendorCount = finalJob.vendorProfiles?.length ?? 0;
+              result.metrics.analysisDepth =
+                finalJob.benchmarkConfig?.analysisDepth ?? "standard";
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+            } catch (err) {
+              console.warn(`[reducer] Enterprise markdown synthesis failed for "${finalJob.title}":`, err);
+            }
+          } else if (finalJob.jobType !== "fractal-render") {
             try {
               const parsedMetadata = safeParseJobMetadata(finalJob.normalizedCommand);
-              const taskSummaries = finalTasks
-                .filter((t) => t.status === "completed")
-                .map((t) => summarizeTaskOutput(t));
+              const taskSummaries = finalJob.completionSamples;
 
               result.summary = await synthesizeResult(
                 finalJob.title,
@@ -551,6 +575,15 @@ export function setupSocketHandlers(io: IO, port: number) {
                 .filter(Boolean);
             } catch (err) {
               console.warn(`[reducer] LLM synthesis failed for "${finalJob.title}":`, err);
+            }
+
+            try {
+              const artifact = await createJobResultArtifact(finalJob, result);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+              result.metrics.artifactType = "markdown";
+            } catch (err) {
+              console.warn(`[results] Markdown artifact write failed for "${finalJob.title}":`, err);
             }
           }
 
@@ -581,6 +614,114 @@ export function setupSocketHandlers(io: IO, port: number) {
         }
 
         // Broadcast updated worker list
+        const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
+        if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
+      }
+    });
+
+    // ── Task failed ───────────────────────────────────────────────────────────
+    socket.on("task:failed", ({ taskId, error }) => {
+      const worker = getWorkerBySocket(socket.id);
+      if (!worker) return;
+
+      const now = Date.now();
+      const task = getTask(taskId);
+      if (!task) return;
+
+      const job = getJob(task.jobId);
+      if (!job) return;
+
+      const taskDurationMs = task.startedAt ? Math.max(now - task.startedAt, 0) : 0;
+
+      updateTask(taskId, { status: "failed", progress: 0 });
+      updateWorker(worker.id, {
+        status: "idle",
+        currentTaskId: undefined,
+        activeTasks: Math.max((worker.activeTasks ?? 1) - 1, 0),
+        totalBusyMs: worker.totalBusyMs + taskDurationMs,
+        lastHeartbeatAt: now,
+      });
+
+      console.warn(`[task] "${taskId}" failed on worker "${worker.name}": ${error ?? "unknown error"}`);
+
+      deleteTask(taskId);
+      const updatedJob = updateJob(job.id, {
+        taskIds: job.taskIds.filter((id) => id !== taskId),
+        failedTasks: job.failedTasks + 1,
+      })!;
+
+      const hostSocketId = getHostSocketForSession(worker.sessionCode);
+      const allDone = updatedJob.completedTasks + updatedJob.failedTasks >= updatedJob.totalTasks;
+
+      if (allDone) {
+        const completedJob = updateJob(updatedJob.id, {
+          status: "reducing",
+          completedAt: now,
+        })!;
+        persistJobAndWorkers(completedJob.id);
+        if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(completedJob));
+
+        (async () => {
+          await new Promise<void>((r) => setTimeout(r, 400));
+          const finalJob = getJob(updatedJob.id)!;
+          const finalTasks = getTasksForJob(updatedJob.id);
+          const result = reduceJobResults(finalJob, finalTasks);
+
+          if (finalJob.jobType === "enterprise-analysis") {
+            try {
+              const markdown = await synthesizeEnterpriseMarkdown(
+                finalJob,
+                finalJob.vendorProfiles ?? [],
+                finalJob.completionSamples
+              );
+              const artifact = await createEnterpriseMarkdownArtifact(finalJob, markdown);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              result.summary = buildEnterpriseResultSummary(markdown);
+              result.outputLines = markdown
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .slice(0, 12);
+              result.metrics.artifactType = "markdown";
+              result.metrics.vendorCount = finalJob.vendorProfiles?.length ?? 0;
+              result.metrics.analysisDepth =
+                finalJob.benchmarkConfig?.analysisDepth ?? "standard";
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+            } catch (err) {
+              console.warn(`[reducer] Enterprise synthesis failed after task failures:`, err);
+            }
+          } else if (finalJob.jobType !== "fractal-render") {
+            try {
+              const artifact = await createJobResultArtifact(finalJob, result);
+              const updatedWithArtifact = appendJobArtifact(finalJob.id, artifact) ?? finalJob;
+              finalJob.artifacts = updatedWithArtifact.artifacts;
+              result.metrics.artifactType = "markdown";
+            } catch (err) {
+              console.warn(`[results] Markdown artifact write failed after task failures:`, err);
+            }
+          }
+
+          const finishedJob = updateJob(updatedJob.id, {
+            status: "completed",
+            result,
+            taskIds: [],
+          })!;
+          persistJobAndWorkers(finishedJob.id);
+          console.log(`[reducer] Job "${updatedJob.title}" completed (with ${updatedJob.failedTasks} failed tasks)`);
+
+          if (hostSocketId) {
+            io.to(hostSocketId).emit("job:complete", {
+              job: toWireJob(finishedJob),
+              result,
+            });
+          }
+          const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
+          if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
+        })();
+      } else {
+        if (hostSocketId) io.to(hostSocketId).emit("job:update", toWireJob(updatedJob));
+        persistJobAndWorkers(updatedJob.id);
+        if (hostSocketId) runScheduler(io, worker.sessionCode, hostSocketId);
         const workers = getWorkersForSession(worker.sessionCode).map(toWireWorker);
         if (hostSocketId) io.to(hostSocketId).emit("workers:update", workers);
       }
@@ -658,19 +799,54 @@ function safeParseJobMetadata(normalizedCommand: string): {
 
 function summarizeTaskOutput(task: ReturnType<typeof getTask> extends infer T ? NonNullable<T> : never) {
   const output = task.outputPayload;
+  const role =
+    typeof task.inputPayload.role === "string" ? `${task.inputPayload.role}: ` : "";
   if (!output) return `${task.title}: completed`;
 
+  if (typeof output.markdown === "string") {
+    return `${role}${task.title}: ${output.markdown.replace(/\s+/g, " ").slice(0, 320)}`;
+  }
+
   if (typeof output.summary === "string") {
-    return `${task.title}: ${output.summary}`;
+    return `${role}${sanitizeSummaryText(output.summary)}`;
   }
 
   if (typeof output.result === "string") {
-    return `${task.title}: ${output.result}`;
+    return `${role}${task.title}: ${sanitizeSummaryText(output.result)}`;
   }
 
   if (typeof output.durationMs === "number") {
     return `${task.title}: completed in ${Math.round(output.durationMs)}ms`;
   }
 
-  return `${task.title}: ${JSON.stringify(output)}`;
+  return `${role}${task.title}: ${sanitizeSummaryText(JSON.stringify(output))}`;
+}
+
+function normalizeBenchmarkConfig(
+  config: EnterpriseBenchmarkConfig | undefined
+): EnterpriseBenchmarkConfig | undefined {
+  if (!config || config.benchmarkType !== "enterprise-vendor-risk-selection") return undefined;
+
+  return {
+    benchmarkType: config.benchmarkType,
+    difficulty: Math.min(Math.max(Math.round(config.difficulty), 1), 100),
+    vendorCount: Math.max(1, Math.round(config.vendorCount)),
+    analysisDepth: config.analysisDepth,
+  };
+}
+
+function sanitizeSummaryText(text: string): string {
+  const withoutDanglingClosingTag =
+    text.includes("</think>") && !text.includes("<think>")
+      ? text.slice(text.indexOf("</think>") + "</think>".length)
+      : text;
+
+  return withoutDanglingClosingTag
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<\/?think>/gi, "")
+    .replace(/\bThe user says\b[\s\S]*/i, "")
+    .replace(/\bWe need to\b[\s\S]*/i, "")
+    .replace(/\bLet's parse\b[\s\S]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }

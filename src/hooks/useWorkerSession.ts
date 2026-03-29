@@ -153,7 +153,9 @@ export function useWorkerSession(): WorkerSessionState {
       const executor =
         task.jobType === "fractal-render"
           ? executeFractalTileTask
-          : task.jobType === "batch-inference" || task.jobType === "llm-analysis"
+          : task.jobType === "batch-inference" ||
+            task.jobType === "llm-analysis" ||
+            task.jobType === "enterprise-analysis"
           ? async (t: WireTask, onProgress: (p: number) => void) => {
               onProgress(15);
               const result = await executeK2InferenceTask(t);
@@ -189,6 +191,10 @@ export function useWorkerSession(): WorkerSessionState {
         }, 2500);
       } catch (err) {
         console.error("[worker] task execution error:", err);
+        socket.emit("task:failed", {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
         executingRef.current = null;
         setWorkerStatus("idle");
         setCurrentTask(null);

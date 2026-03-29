@@ -38,7 +38,7 @@ Workers join at **http://\<your-local-ip\>:3000/join** on any device on the same
 
 ---
 
-## Architecture
+## Architecture 
 
 ```
 server.ts                    Custom Node.js server (HTTP + Socket.IO + Next.js)

@@ -1,16 +1,32 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, ListTodo, Users, QrCode, Settings, Zap } from "lucide-react";
+import { LayoutDashboard, ListTodo, Users, QrCode } from "lucide-react";
 
-const navItems = [
-  { path: "/host", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { path: "/host/workers", label: "Workers", icon: Users, exact: false },
-  { path: "/host/tasks", label: "Task Queue", icon: ListTodo, exact: false },
-];
+interface SidebarProps {
+  workerCountLabel?: string;
+  taskCountLabel?: string;
+}
 
-export function Sidebar() {
+export function Sidebar({ workerCountLabel, taskCountLabel }: SidebarProps) {
   const pathname = usePathname();
+  const navItems = [
+    { path: "/host", label: "Dashboard", icon: LayoutDashboard, exact: true },
+    {
+      path: "/host/workers",
+      label: "Workers",
+      icon: Users,
+      exact: false,
+      countLabel: workerCountLabel,
+    },
+    {
+      path: "/host/tasks",
+      label: "Task Queue",
+      icon: ListTodo,
+      exact: false,
+      countLabel: taskCountLabel,
+    },
+  ];
 
   const isActive = (item: (typeof navItems)[number]) => {
     if (item.exact) return pathname === item.path;
@@ -41,7 +57,12 @@ export function Sidebar() {
               }`}
             >
               <Icon size={15} strokeWidth={active ? 2.5 : 2} />
-              <span>{item.label}</span>
+              <span className="flex-1">{item.label}</span>
+              {item.countLabel ? (
+                <span className="text-[9px] font-black tracking-widest text-inherit/70">
+                  {item.countLabel}
+                </span>
+              ) : null}
             </Link>
           );
         })}
@@ -55,21 +76,6 @@ export function Sidebar() {
         <QrCode size={13} />
         Join as Worker
       </Link>
-
-      {/* Bottom */}
-      <div className="flex flex-col gap-1 border-t border-[#120B09]/5 pt-4 mt-2">
-        <Link
-          href="/host"
-          className="flex items-center gap-3 px-4 py-3 text-[#120B09]/40 hover:bg-[#F5F1EE] hover:text-[#120B09] font-[Inter,sans-serif] text-[11px] font-bold uppercase tracking-wider rounded-sm transition-all"
-        >
-          <Zap size={14} />
-          <span>Orchestrate</span>
-        </Link>
-        <a href="#" className="flex items-center gap-3 px-4 py-3 text-[#120B09]/40 hover:bg-[#F5F1EE] hover:text-[#120B09] font-[Inter,sans-serif] text-[11px] font-bold uppercase tracking-wider rounded-sm transition-all">
-          <Settings size={14} />
-          <span>Settings</span>
-        </a>
-      </div>
     </aside>
   );
 }
