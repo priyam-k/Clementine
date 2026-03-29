@@ -1,20 +1,14 @@
 'use client'
 
-import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowUpRight } from 'lucide-react'
 import { useState, useEffect } from 'react'
-
-// Must be called at module top-level inside a 'use client' component (Next.js 16 requirement)
-const ClusterOrb = dynamic(() => import('@/components/three/ClusterOrb'), {
-  ssr: false,
-  loading: () => <div className="w-full h-full bg-[#EDE5D8]" />,
-})
+import HeroMeshViz from '@/components/landing/HeroMeshViz'
 
 const CYCLING_WORDS = ['NEXUS', 'RAPID', 'SECURE', 'POOLED']
 
-const textSize = 'text-[15vw] sm:text-[12vw] lg:text-[7.5rem] xl:text-[8.5rem]'
+const textSize = 'text-[12vw] sm:text-[10vw] lg:text-[6rem] xl:text-[6.75rem]'
 const textBase = `block font-black tracking-tighter leading-[0.85] ${textSize}`
 
 export default function Hero() {
@@ -125,10 +119,10 @@ export default function Hero() {
           initial={{ opacity: 0, scale: 0.97 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 1.1, delay: 0.7, ease: 'easeOut' }}
-          className="hidden lg:flex justify-end lg:translate-x-14 xl:translate-x-20"
+          className="hidden lg:flex justify-end lg:translate-x-4 xl:translate-x-6"
         >
           <div className="aspect-square w-full max-w-[520px]">
-            <ClusterOrb />
+            <HeroMeshViz />
           </div>
         </motion.div>
       </div>

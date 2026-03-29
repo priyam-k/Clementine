@@ -98,6 +98,102 @@ function easeInOut(t: number) {
 
 // ─── Viz 1: Distributed Mesh ──────────────────────────────────────────────────
 
+type MCol = [number, number, number]
+const mc = (col: MCol, a: number) => `rgba(${col[0]},${col[1]},${col[2]},${a})`
+
+const NODE_COLORS: MCol[] = [
+  [91,  184, 168],  // teal
+  [123, 163, 200],  // slate blue
+  [124, 184, 122],  // sage green
+  [155, 135, 196],  // soft lavender
+  [212, 168,  67],  // warm amber
+  [196, 123, 142],  // dusty rose
+  [220, 120, 100],  // coral
+  [100, 185, 220],  // sky blue
+  [168, 200,  95],  // lime green
+  [180, 138, 198],  // soft purple
+  [240, 160,  80],  // orange
+  [110, 200, 180],  // mint
+]
+
+// Node: ring + inner core + expanding pulse — clearly different from the hub-spoke HeroMeshViz
+function meshDrawPeer(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, r: number, alpha: number, col: MCol, pulse: number,
+) {
+  // Soft ambient glow
+  const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 3.8)
+  glow.addColorStop(0, mc(col, 0.18 * alpha))
+  glow.addColorStop(1, mc(col, 0))
+  ctx.beginPath(); ctx.arc(x, y, r * 3.8, 0, Math.PI * 2); ctx.fillStyle = glow; ctx.fill()
+
+  // Expanding pulse ring (each node has its own offset)
+  if (pulse < 0.75) {
+    ctx.beginPath(); ctx.arc(x, y, r * (1.8 + pulse * 4.5), 0, Math.PI * 2)
+    ctx.strokeStyle = mc(col, 0.32 * (1 - pulse / 0.75) * alpha)
+    ctx.lineWidth = 0.7; ctx.stroke()
+  }
+
+  // Outer faint ring
+  ctx.beginPath(); ctx.arc(x, y, r * 1.7, 0, Math.PI * 2)
+  ctx.strokeStyle = mc(col, 0.28 * alpha); ctx.lineWidth = 0.6; ctx.stroke()
+
+  // Main ring
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.strokeStyle = mc(col, 0.9 * alpha); ctx.lineWidth = 1.6; ctx.stroke()
+
+  // Inner filled core
+  ctx.beginPath(); ctx.arc(x, y, r * 0.32, 0, Math.PI * 2)
+  ctx.fillStyle = mc(col, alpha); ctx.fill()
+}
+
+// Straight peer-to-peer link with gradient color + one traveling data packet
+function meshDrawLink(
+  ctx: CanvasRenderingContext2D,
+  x1: number, y1: number, x2: number, y2: number,
+  alpha: number, now: number, linkIdx: number, col1: MCol, col2: MCol,
+) {
+  if (alpha < 0.02) return
+
+  const grad = ctx.createLinearGradient(x1, y1, x2, y2)
+  grad.addColorStop(0, mc(col1, 0.5 * alpha))
+  grad.addColorStop(1, mc(col2, 0.5 * alpha))
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2)
+  ctx.strokeStyle = grad; ctx.lineWidth = 0.75; ctx.setLineDash([]); ctx.stroke()
+
+  // Single traveling packet, color interpolated along the line
+  const t = ((now / 1100 + linkIdx * 0.29) % 1)
+  const px = x1 + (x2 - x1) * t
+  const py = y1 + (y2 - y1) * t
+  const ic: MCol = [
+    Math.round(col1[0] + (col2[0] - col1[0]) * t),
+    Math.round(col1[1] + (col2[1] - col1[1]) * t),
+    Math.round(col1[2] + (col2[2] - col1[2]) * t),
+  ]
+  const pg = ctx.createRadialGradient(px, py, 0, px, py, 5)
+  pg.addColorStop(0, mc(ic, 0.7 * alpha)); pg.addColorStop(1, mc(ic, 0))
+  ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fillStyle = pg; ctx.fill()
+  ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI * 2)
+  ctx.fillStyle = mc(ic, alpha); ctx.fill()
+}
+
+// 12 nodes scattered organically — kept away from edges so glows don't clip
+const MESH_NODES = [
+  { fx: 0.14, fy: 0.18, phase: 0    },
+  { fx: 0.44, fy: 0.13, phase: 750  },
+  { fx: 0.76, fy: 0.18, phase: 1500 },
+  { fx: 0.88, fy: 0.40, phase: 2250 },
+  { fx: 0.84, fy: 0.68, phase: 3000 },
+  { fx: 0.62, fy: 0.84, phase: 3750 },
+  { fx: 0.32, fy: 0.85, phase: 4500 },
+  { fx: 0.12, fy: 0.68, phase: 5250 },
+  { fx: 0.10, fy: 0.42, phase: 6000 },
+  { fx: 0.30, fy: 0.40, phase: 6750 },
+  { fx: 0.62, fy: 0.46, phase: 7500 },
+  { fx: 0.46, fy: 0.62, phase: 8250 },
+]
+const MESH_CYCLE = 5000, MESH_FADE = 350, MESH_HOLD = 1400
+
 function MeshViz() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -117,23 +213,13 @@ function MeshViz() {
     const start = performance.now()
     let raf = 0
 
-    // Hub + 5 satellites, staggered appearance
-    const nodes = [
-      { fx: 0.50, fy: 0.47, appear: 0 },
-      { fx: 0.24, fy: 0.22, appear: 350 },
-      { fx: 0.76, fy: 0.20, appear: 700 },
-      { fx: 0.84, fy: 0.62, appear: 1050 },
-      { fx: 0.52, fy: 0.80, appear: 1400 },
-      { fx: 0.16, fy: 0.65, appear: 1750 },
-    ]
-    // Hub connects to all; outer ring connects to adjacent
-    const edges = [
-      [0,1],[0,2],[0,3],[0,4],[0,5],
-      [1,2],[2,3],[3,4],[4,5],[5,1],
-    ]
-
-    const pulses = nodes.map(() => -1)
-    const nextPulse = nodes.map((n, i) => n.appear + 1800 + i * 420)
+    const nodeAlpha = (phase: number, now: number) => {
+      const t = ((now - phase) % MESH_CYCLE + MESH_CYCLE) % MESH_CYCLE
+      if (t < MESH_FADE) return t / MESH_FADE
+      if (t < MESH_FADE + MESH_HOLD) return 1
+      if (t < MESH_FADE * 2 + MESH_HOLD) return 1 - (t - MESH_FADE - MESH_HOLD) / MESH_FADE
+      return 0
+    }
 
     function tick() {
       raf = requestAnimationFrame(tick)
@@ -142,61 +228,38 @@ function MeshViz() {
       ctx.clearRect(0, 0, W, H)
       dotGrid(ctx, W, H)
 
-      const nr = Math.min(W, H) * 0.027
-      const opacities = nodes.map(n => now < n.appear ? 0 : Math.min(1, (now - n.appear) / 650))
+      const s = Math.min(W, H)
+      const nr = s * 0.030
+      const threshold = s * 0.44
 
-      // Update pulses
-      nodes.forEach((_, i) => {
-        if (pulses[i] < 0 && now >= nextPulse[i] && opacities[i] > 0.8) {
-          pulses[i] = 0
-        }
-        if (pulses[i] >= 0) {
-          pulses[i] = (now - nextPulse[i]) / 1100
-          if (pulses[i] > 1) {
-            pulses[i] = -1
-            nextPulse[i] = now + 1600 + i * 280
+      const nodes = MESH_NODES.map((n, i) => ({
+        x: n.fx * W, y: n.fy * H,
+        a: nodeAlpha(n.phase, now),
+        col: NODE_COLORS[i],
+      }))
+
+      // Links first (behind nodes)
+      let linkIdx = 0
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const ni = nodes[i], nj = nodes[j]
+          if (ni.a > 0.04 && nj.a > 0.04) {
+            const dist = Math.sqrt((ni.x - nj.x) ** 2 + (ni.y - nj.y) ** 2)
+            if (dist < threshold) {
+              const a = Math.min(ni.a, nj.a) * (1 - dist / threshold)
+              meshDrawLink(ctx, ni.x, ni.y, nj.x, nj.y, a, now, linkIdx, ni.col, nj.col)
+            }
           }
+          linkIdx++
         }
-      })
-
-      // Edges
-      edges.forEach(([a, b]) => {
-        const al = opacities[a] * opacities[b]
-        if (al < 0.01) return
-        const ax = nodes[a].fx * W, ay = nodes[a].fy * H
-        const bx = nodes[b].fx * W, by = nodes[b].fy * H
-
-        ctx.beginPath()
-        ctx.moveTo(ax, ay); ctx.lineTo(bx, by)
-        ctx.strokeStyle = `rgba(239,131,84,${0.07 * al})`
-        ctx.lineWidth = 5
-        ctx.setLineDash([])
-        ctx.stroke()
-
-        ctx.beginPath()
-        ctx.moveTo(ax, ay); ctx.lineTo(bx, by)
-        ctx.strokeStyle = `rgba(239,131,84,${0.22 * al})`
-        ctx.lineWidth = 1
-        ctx.setLineDash([3, 9])
-        ctx.lineDashOffset = -(now / 58) % 12
-        ctx.stroke()
-        ctx.setLineDash([])
-        ctx.lineDashOffset = 0
-      })
-
-      // Nodes
-      nodes.forEach((n, i) => {
-        if (opacities[i] < 0.01) return
-        drawNode(ctx, n.fx * W, n.fy * H, nr, opacities[i], pulses[i] >= 0 ? pulses[i] : 0)
-      })
-
-      // Hub label
-      if (opacities[0] > 0.5) {
-        ctx.font = '700 8px Inter, system-ui, sans-serif'
-        ctx.textAlign = 'center'
-        ctx.fillStyle = `rgba(255,210,170,${opacities[0] * 0.65})`
-        ctx.fillText('HUB', nodes[0].fx * W, nodes[0].fy * H + nr + 12)
       }
+
+      // Nodes on top
+      nodes.forEach((n, i) => {
+        if (n.a < 0.01) return
+        const pulse = ((now / 2200 + i * 0.19) % 1)
+        meshDrawPeer(ctx, n.x, n.y, nr, n.a, n.col, pulse)
+      })
     }
 
     raf = requestAnimationFrame(tick)
