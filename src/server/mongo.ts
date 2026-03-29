@@ -6,11 +6,11 @@ import type { WireJob, WireTask } from "../lib/shared-types";
 let client: MongoClient | null = null;
 let db: Db | null = null;
 
-const MONGODB_URI = process.env.MONGODB_URI ?? "";
 const DB_NAME = "clementine";
 
 async function getDb(): Promise<Db | null> {
   if (db) return db;
+  const MONGODB_URI = process.env.MONGODB_URI ?? "";
   if (!MONGODB_URI) {
     console.warn("[mongo] MONGODB_URI not set — logging disabled");
     return null;
