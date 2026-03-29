@@ -3,7 +3,6 @@ import { ArrowUpRight } from 'lucide-react'
 import Nav from '@/components/landing/Nav'
 import Hero from '@/components/landing/Hero'
 import Features from '@/components/landing/Features'
-import HowItWorks from '@/components/landing/HowItWorks'
 
 export default function LandingPage() {
   return (
@@ -11,7 +10,6 @@ export default function LandingPage() {
       <Nav />
       <Hero />
       <Features />
-      <HowItWorks />
 
       {/* CTA banner */}
       <section className="bg-[#EF8354] py-20 px-6 text-center">

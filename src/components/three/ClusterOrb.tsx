@@ -2,29 +2,22 @@
 
 import { useRef, useEffect } from 'react'
 
-const NUM_SLOTS = 8
-const MAX_DEVICES = 6
-const MIN_LIFETIME_MS = 8000
-const MAX_LIFETIME_MS = 13000
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-type DeviceType = 'laptop' | 'phone' | 'tablet' | 'desktop'
+type DeviceType = 'laptop' | 'phone' | 'desktop'
+type DeviceState = 'connected' | 'disconnecting' | 'disconnected' | 'connecting'
 
 interface Device {
-  slotIndex: number
-  baseAngle: number
-  driftSeed: number
-  opacity: number
-  lifetime: number
-  born: number
   type: DeviceType
+  posX: number
+  posY: number
+  cp1Nudge: number
+  cp2Nudge: number
+  state: DeviceState
+  stateTimer: number
+  connectedDuration: number
+  opacity: number
   nextPulse: number
-}
-
-interface Pulse {
-  fromX: number
-  fromY: number
-  progress: number
-  triggered: boolean
 }
 
 interface GlowRing {
@@ -32,121 +25,213 @@ interface GlowRing {
   duration: number
 }
 
-function slotAngle(i: number) {
-  return (i / NUM_SLOTS) * Math.PI * 2 - Math.PI / 2
-}
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-function drawClementine(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+const FADE_MS          = 1400
+const CONNECTED_MIN    = 7000
+const CONNECTED_MAX    = 13000
+const DISCONNECTED_MIN = 3000
+const DISCONNECTED_MAX = 7000
+
+function rand(min: number, max: number) { return min + Math.random() * (max - min) }
+const lv = (a: number, b: number, t: number) => a + (b - a) * t  // lerp
+
+// ─── Clementine illustration ──────────────────────────────────────────────────
+// power: 0 = withered/rotten, 1 = fresh/vibrant
+
+function drawClementine(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  r: number,
+  power: number,
+  now: number,
+) {
+  // Shimmer: gentle highlight oscillation when fresh
+  const shimmer = Math.sin(now / 900) * 0.5 + 0.5
+
+  // Scale: slightly deflated when withered
+  const scX = lv(0.93, 1.00, power)
+  const scY = lv(0.84, 0.91, power)
+
+  // ── Body ──────────────────────────────────────────────────────────────────
   ctx.save()
   ctx.translate(cx, cy)
-  // Clementines are slightly oblate (wider than tall)
-  ctx.scale(1.0, 0.91)
+  ctx.scale(scX, scY)
 
-  // Body — warm orange, darker at edges and shadow side
-  const body = ctx.createRadialGradient(-r * 0.2, -r * 0.15, r * 0.04, r * 0.08, r * 0.1, r * 1.08)
-  body.addColorStop(0,   '#FFB94A')
-  body.addColorStop(0.3, '#F57320')
-  body.addColorStop(0.7, '#E05412')
-  body.addColorStop(1,   '#B03A08')
+  // Gradient colours: lerp fresh-orange ↔ dark rotten-brown
+  const g = ctx.createRadialGradient(
+    -r * 0.20, -r * 0.18, r * 0.04,
+     r * 0.05,  r * 0.08, r * 1.08
+  )
+  g.addColorStop(0,    `rgb(${lv(105,255,power)|0},${lv( 52,185,power)|0},${lv(12, 71,power)|0})`)
+  g.addColorStop(0.35, `rgb(${lv( 68,244,power)|0},${lv( 32,115,power)|0},${lv( 6, 32,power)|0})`)
+  g.addColorStop(1,    `rgb(${lv( 32,200,power)|0},${lv( 14, 69,power)|0},${lv( 2, 16,power)|0})`)
   ctx.beginPath()
   ctx.arc(0, 0, r, 0, Math.PI * 2)
-  ctx.fillStyle = body
+  ctx.fillStyle = g
   ctx.fill()
 
-  // Segment lines: curves from top pole → bottom pole (longitude style)
+  // ── Segment lines ──────────────────────────────────────────────────────────
   ctx.save()
   ctx.beginPath()
   ctx.arc(0, 0, r, 0, Math.PI * 2)
   ctx.clip()
-  const NUM_SEG_LINES = 9
-  for (let i = 0; i < NUM_SEG_LINES; i++) {
-    // x offset at the equator, spread from -r to +r
-    const xEq = (((i + 0.5) / NUM_SEG_LINES) * 2 - 1) * r * 0.88
+  const segOpacity = lv(0.32, 0.17, power)
+  const segWidth   = lv(1.10, 0.75, power)
+  for (let i = 0; i < 9; i++) {
+    const xEq = (((i + 0.5) / 9) * 2 - 1) * r * 0.88
     ctx.beginPath()
-    ctx.moveTo(0, -r)                           // top pole
-    ctx.bezierCurveTo(xEq * 0.72, -r * 0.48, xEq * 0.72, r * 0.48, 0, r) // bottom pole
-    ctx.strokeStyle = 'rgba(150, 48, 8, 0.17)'
-    ctx.lineWidth = 0.75
+    ctx.moveTo(0, -r)
+    ctx.bezierCurveTo(xEq * 0.72, -r * 0.48, xEq * 0.72, r * 0.48, 0, r)
+    ctx.strokeStyle = `rgba(70,22,4,${segOpacity})`
+    ctx.lineWidth = segWidth
     ctx.stroke()
+  }
+
+  // ── Rot blemishes (appear below power=0.65) ────────────────────────────────
+  if (power < 0.65) {
+    const bAlpha = ((0.65 - power) / 0.65) * 0.80
+    const spots = [
+      { x: -r * 0.24, y: -r * 0.26, s: r * 0.15 },
+      { x:  r * 0.30, y:  r * 0.10, s: r * 0.12 },
+      { x: -r * 0.06, y:  r * 0.38, s: r * 0.11 },
+      { x:  r * 0.14, y: -r * 0.44, s: r * 0.09 },
+    ]
+    spots.forEach(sp => {
+      const sg = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, sp.s)
+      sg.addColorStop(0,   `rgba(12,4,1,${bAlpha})`)
+      sg.addColorStop(0.55,`rgba(28,10,2,${bAlpha * 0.55})`)
+      sg.addColorStop(1,   `rgba(28,10,2,0)`)
+      ctx.beginPath()
+      ctx.arc(sp.x, sp.y, sp.s, 0, Math.PI * 2)
+      ctx.fillStyle = sg
+      ctx.fill()
+    })
   }
   ctx.restore()
 
-  // Pole dimple — top (stem end): characteristic dark indent of a clementine
-  const topDimple = ctx.createRadialGradient(0, -r * 0.84, 0, 0, -r * 0.84, r * 0.24)
-  topDimple.addColorStop(0,   'rgba(110, 30, 4, 0.55)')
-  topDimple.addColorStop(0.5, 'rgba(150, 50, 8, 0.22)')
-  topDimple.addColorStop(1,   'rgba(150, 50, 8, 0)')
+  // ── Pole dimples ───────────────────────────────────────────────────────────
+  const pd = ctx.createRadialGradient(0, -r * 0.84, 0, 0, -r * 0.84, r * 0.24)
+  pd.addColorStop(0,   `rgba(${lv(8,110,power)|0},${lv(3,30,power)|0},${lv(0,4,power)|0},${lv(0.65,0.55,power)})`)
+  pd.addColorStop(1,   'rgba(0,0,0,0)')
   ctx.beginPath()
-  ctx.ellipse(0, -r * 0.86, r * 0.2, r * 0.14, 0, 0, Math.PI * 2)
-  ctx.fillStyle = topDimple
+  ctx.ellipse(0, -r * 0.86, r * 0.20, r * 0.14, 0, 0, Math.PI * 2)
+  ctx.fillStyle = pd
   ctx.fill()
 
-  // Pole dimple — bottom (blossom end)
-  const btmDimple = ctx.createRadialGradient(0, r * 0.86, 0, 0, r * 0.86, r * 0.18)
-  btmDimple.addColorStop(0,   'rgba(110, 30, 4, 0.42)')
-  btmDimple.addColorStop(1,   'rgba(110, 30, 4, 0)')
+  const bd = ctx.createRadialGradient(0, r * 0.86, 0, 0, r * 0.86, r * 0.18)
+  bd.addColorStop(0,   `rgba(${lv(6,110,power)|0},${lv(2,30,power)|0},${lv(0,4,power)|0},0.45)`)
+  bd.addColorStop(1,   'rgba(0,0,0,0)')
   ctx.beginPath()
-  ctx.ellipse(0, r * 0.87, r * 0.15, r * 0.1, 0, 0, Math.PI * 2)
-  ctx.fillStyle = btmDimple
+  ctx.ellipse(0, r * 0.87, r * 0.15, r * 0.10, 0, 0, Math.PI * 2)
+  ctx.fillStyle = bd
   ctx.fill()
 
-  // Specular highlight — soft upper-left glow
-  const hl = ctx.createRadialGradient(-r * 0.3, -r * 0.32, 0, -r * 0.22, -r * 0.26, r * 0.54)
-  hl.addColorStop(0,   'rgba(255, 252, 215, 0.62)')
-  hl.addColorStop(0.4, 'rgba(255, 230, 150, 0.18)')
-  hl.addColorStop(1,   'rgba(255, 230, 150, 0)')
+  // ── Specular highlight ─────────────────────────────────────────────────────
+  const hlBase  = lv(0.04, 0.52, power)
+  const hlShimmer = hlBase + power * shimmer * 0.14
+  const hl = ctx.createRadialGradient(
+    -r * 0.30, -r * 0.32, 0,
+    -r * 0.22, -r * 0.26, r * 0.54
+  )
+  hl.addColorStop(0,   `rgba(255,252,215,${hlShimmer})`)
+  hl.addColorStop(0.4, `rgba(255,230,150,${hlShimmer * 0.28})`)
+  hl.addColorStop(1,   'rgba(255,230,150,0)')
   ctx.beginPath()
   ctx.ellipse(-r * 0.24, -r * 0.28, r * 0.38, r * 0.26, -0.42, 0, Math.PI * 2)
   ctx.fillStyle = hl
   ctx.fill()
 
+  // ── Subtle secondary highlight at fresh ───────────────────────────────────
+  if (power > 0.5) {
+    const sh2 = (power - 0.5) / 0.5 * 0.22
+    const hl2 = ctx.createRadialGradient(r * 0.28, r * 0.22, 0, r * 0.28, r * 0.22, r * 0.28)
+    hl2.addColorStop(0, `rgba(255,200,100,${sh2})`)
+    hl2.addColorStop(1, 'rgba(255,200,100,0)')
+    ctx.beginPath()
+    ctx.arc(r * 0.28, r * 0.22, r * 0.28, 0, Math.PI * 2)
+    ctx.fillStyle = hl2
+    ctx.fill()
+  }
+
   ctx.restore() // end translate + scale
 
-  // Leaves and stem drawn in world-space (unaffected by oblate scale)
+  // ── Stem & leaves (world space, unscaled) ─────────────────────────────────
+  const stemY = cy - r * lv(0.84, 0.90, power)
   ctx.save()
-  ctx.translate(cx, cy - r * 0.9)
+  ctx.translate(cx, stemY)
 
-  // Stem
+  // Stem colour and length
+  const stemLen = r * lv(0.12, 0.20, power)
   ctx.beginPath()
   ctx.moveTo(0, 0)
-  ctx.lineTo(0, -r * 0.2)
-  ctx.strokeStyle = '#5C3514'
+  ctx.lineTo(0, -stemLen)
+  ctx.strokeStyle = `rgb(${lv(38,92,power)|0},${lv(22,53,power)|0},${lv(5,20,power)|0})`
   ctx.lineWidth = Math.max(1.2, r * 0.085)
   ctx.lineCap = 'round'
   ctx.stroke()
 
-  // Left leaf — larger, sweeps up-left
+  // Leaf colours: fresh green → wilted olive-brown
+  const lc1 = `rgb(${lv(78,60,power)|0},${lv(72,114,power)|0},${lv(14,32,power)|0})`
+  const lc2 = `rgb(${lv(88,74,power)|0},${lv(82,136,power)|0},${lv(18,40,power)|0})`
+  const veinA = lv(0.20, 0.36, power)
+
+  // Left leaf — lerp upright (fresh) ↔ drooped (withered)
+  const llEndX  = lv(-r * 0.38, -r * 0.32, power)
+  const llEndY  = lv( r * 0.14, -r * 0.70, power)
+  const llCp1X  = lv(-r * 0.10, -r * 0.14, power)
+  const llCp1Y  = lv(-r * 0.03, -r * 0.30, power)
+  const llCp2X  = lv(-r * 0.32, -r * 0.56, power)
+  const llCp2Y  = lv( r * 0.12, -r * 0.32, power)
+  const llR1X   = lv(-r * 0.40, -r * 0.60, power)
+  const llR1Y   = lv( r * 0.18, -r * 0.36, power)
+  const llR2X   = lv(-r * 0.16, -r * 0.32, power)
+  const llR2Y   = lv( r * 0.06, -r * 0.02, power)
+
   ctx.beginPath()
   ctx.moveTo(0, -r * 0.05)
-  ctx.bezierCurveTo(-r * 0.14, -r * 0.3, -r * 0.56, -r * 0.32, -r * 0.32, -r * 0.7)
-  ctx.bezierCurveTo(-r * 0.6,  -r * 0.36, -r * 0.32, -r * 0.02,  0, -r * 0.05)
-  ctx.fillStyle = '#3C7220'
+  ctx.bezierCurveTo(llCp1X, llCp1Y, llCp2X, llCp2Y, llEndX, llEndY)
+  ctx.bezierCurveTo(llR1X, llR1Y, llR2X, llR2Y, 0, -r * 0.05)
+  ctx.fillStyle = lc1
   ctx.fill()
-  // Central vein
+  // Vein
   ctx.beginPath()
   ctx.moveTo(0, -r * 0.05)
-  ctx.quadraticCurveTo(-r * 0.28, -r * 0.4, -r * 0.32, -r * 0.7)
-  ctx.strokeStyle = 'rgba(22, 65, 6, 0.36)'
-  ctx.lineWidth = 0.65
+  ctx.quadraticCurveTo(lv(-r * 0.20, -r * 0.28, power), lv(r * 0.06, -r * 0.40, power), llEndX, llEndY)
+  ctx.strokeStyle = `rgba(20,45,5,${veinA})`
+  ctx.lineWidth = 0.7
   ctx.stroke()
 
-  // Right leaf — slightly smaller, different angle
+  // Right leaf — also lerp upright ↔ drooped
+  const rlEndX  = lv( r * 0.32,  r * 0.24, power)
+  const rlEndY  = lv( r * 0.12, -r * 0.58, power)
+  const rlCp1X  = lv( r * 0.08,  r * 0.10, power)
+  const rlCp1Y  = lv(-r * 0.03, -r * 0.24, power)
+  const rlCp2X  = lv( r * 0.35,  r * 0.44, power)
+  const rlCp2Y  = lv( r * 0.12, -r * 0.26, power)
+  const rlR1X   = lv( r * 0.33,  r * 0.48, power)
+  const rlR1Y   = lv( r * 0.16, -r * 0.30, power)
+  const rlR2X   = lv( r * 0.14,  r * 0.26, power)
+  const rlR2Y   = lv( r * 0.05, -r * 0.02, power)
+
   ctx.beginPath()
   ctx.moveTo(0, -r * 0.05)
-  ctx.bezierCurveTo(r * 0.1, -r * 0.24, r * 0.44, -r * 0.26, r * 0.24, -r * 0.58)
-  ctx.bezierCurveTo(r * 0.48, -r * 0.3,  r * 0.26, -r * 0.02,  0, -r * 0.05)
-  ctx.fillStyle = '#4A8828'
+  ctx.bezierCurveTo(rlCp1X, rlCp1Y, rlCp2X, rlCp2Y, rlEndX, rlEndY)
+  ctx.bezierCurveTo(rlR1X, rlR1Y, rlR2X, rlR2Y, 0, -r * 0.05)
+  ctx.fillStyle = lc2
   ctx.fill()
-  // Central vein
+  // Vein
   ctx.beginPath()
   ctx.moveTo(0, -r * 0.05)
-  ctx.quadraticCurveTo(r * 0.22, -r * 0.34, r * 0.24, -r * 0.58)
-  ctx.strokeStyle = 'rgba(22, 65, 6, 0.36)'
-  ctx.lineWidth = 0.65
+  ctx.quadraticCurveTo(lv(r * 0.20, r * 0.22, power), lv(r * 0.06, -r * 0.34, power), rlEndX, rlEndY)
+  ctx.strokeStyle = `rgba(20,45,5,${veinA})`
+  ctx.lineWidth = 0.7
   ctx.stroke()
 
   ctx.restore()
 }
+
+// ─── Supporting helpers ───────────────────────────────────────────────────────
 
 function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.moveTo(x + r, y)
@@ -160,67 +245,121 @@ function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h
   ctx.quadraticCurveTo(x, y, x + r, y)
 }
 
+function resolveDeviceBezier(d: Device, W: number, H: number, cx: number, cy: number) {
+  const p0x = d.posX * W, p0y = d.posY * H
+  const p3x = cx,         p3y = cy
+  const dx = p3x - p0x, dy = p3y - p0y
+  const dist = Math.sqrt(dx * dx + dy * dy)
+  const perpX = -dy / dist, perpY = dx / dist
+  return {
+    p0x, p0y,
+    p1x: p0x + dx * 0.38 + perpX * dist * d.cp1Nudge,
+    p1y: p0y + dy * 0.38 + perpY * dist * d.cp1Nudge,
+    p2x: p0x + dx * 0.72 + perpX * dist * d.cp2Nudge,
+    p2y: p0y + dy * 0.72 + perpY * dist * d.cp2Nudge,
+    p3x, p3y,
+  }
+}
+
+function computeBarColor(level: number): string {
+  if (level < 0.5) {
+    const t = level * 2
+    return `rgb(${lv(0xD9,0xEF,t)|0},${lv(0x40,0x83,t)|0},${lv(0x40,0x54,t)|0})`
+  }
+  const t = (level - 0.5) * 2
+  return `rgb(${lv(0xEF,0x4C,t)|0},${lv(0x83,0xAF,t)|0},${lv(0x54,0x50,t)|0})`
+}
+
 function drawDevice(ctx: CanvasRenderingContext2D, x: number, y: number, type: DeviceType, opacity: number) {
+  if (opacity < 0.01) return
   ctx.save()
   ctx.globalAlpha = opacity
   ctx.translate(x, y)
-  const s = 13
+  const s = 15
 
   ctx.strokeStyle = '#EF8354'
-  ctx.lineWidth = 1
+  ctx.lineWidth = 1.2
 
   if (type === 'laptop') {
-    ctx.fillStyle = '#1E1410'
+    ctx.fillStyle = '#2A1810'
     ctx.beginPath()
     rrect(ctx, -s * 0.9, -s, s * 1.8, s * 1.2, 2)
     ctx.fill(); ctx.stroke()
-    ctx.fillStyle = 'rgba(239,131,84,0.28)'
-    ctx.fillRect(-s * 0.68, -s * 0.78, s * 1.36, 0.55)
-    ctx.fillRect(-s * 0.68, -s * 0.22, s * 0.95, 0.55)
-    ctx.fillStyle = '#2E1E18'
+    ctx.fillStyle = 'rgba(239,131,84,0.30)'
+    ctx.fillRect(-s * 0.68, -s * 0.78, s * 1.36, 0.7)
+    ctx.fillRect(-s * 0.68, -s * 0.22, s * 0.95, 0.7)
+    ctx.fillStyle = '#3A2218'
     ctx.beginPath()
     rrect(ctx, -s * 1.08, s * 0.22, s * 2.16, s * 0.3, 1)
     ctx.fill()
   } else if (type === 'phone') {
-    ctx.fillStyle = '#1E1410'
+    ctx.fillStyle = '#2A1810'
     ctx.beginPath()
     rrect(ctx, -s * 0.5, -s, s, s * 2, 4)
     ctx.fill(); ctx.stroke()
     ctx.beginPath()
-    ctx.arc(0, s * 0.72, 2.4, 0, Math.PI * 2)
+    ctx.arc(0, s * 0.72, 2.8, 0, Math.PI * 2)
     ctx.strokeStyle = 'rgba(239,131,84,0.45)'
     ctx.stroke()
-    ctx.fillStyle = 'rgba(239,131,84,0.22)'
-    ctx.fillRect(-s * 0.3, -s * 0.55, s * 0.6, 0.5)
-    ctx.fillRect(-s * 0.3, -s * 0.1, s * 0.45, 0.5)
-  } else if (type === 'tablet') {
-    ctx.fillStyle = '#1E1410'
-    ctx.beginPath()
-    rrect(ctx, -s * 0.7, -s * 0.92, s * 1.4, s * 1.84, 3)
-    ctx.fill(); ctx.stroke()
-    ctx.fillStyle = 'rgba(239,131,84,0.22)'
-    ctx.fillRect(-s * 0.5, -s * 0.66, s, 0.5)
-    ctx.fillRect(-s * 0.5, -s * 0.1, s * 0.7, 0.5)
-    ctx.fillRect(-s * 0.5, s * 0.28, s * 0.5, 0.5)
-  } else { // desktop
-    ctx.fillStyle = '#1E1410'
+    ctx.fillStyle = 'rgba(239,131,84,0.25)'
+    ctx.fillRect(-s * 0.3, -s * 0.55, s * 0.6, 0.7)
+    ctx.fillRect(-s * 0.3, -s * 0.1,  s * 0.45, 0.7)
+  } else {
+    ctx.fillStyle = '#2A1810'
     ctx.beginPath()
     rrect(ctx, -s * 0.95, -s * 0.82, s * 1.9, s * 1.38, 2)
     ctx.fill(); ctx.stroke()
     ctx.beginPath()
     ctx.moveTo(-s * 0.28, s * 0.56)
     ctx.lineTo(-s * 0.44, s * 0.94)
-    ctx.lineTo(s * 0.44, s * 0.94)
-    ctx.lineTo(s * 0.28, s * 0.56)
+    ctx.lineTo( s * 0.44, s * 0.94)
+    ctx.lineTo( s * 0.28, s * 0.56)
     ctx.closePath()
-    ctx.fillStyle = '#2E1E18'; ctx.fill()
-    ctx.fillStyle = 'rgba(239,131,84,0.22)'
-    ctx.fillRect(-s * 0.72, -s * 0.58, s * 1.44, 0.5)
-    ctx.fillRect(-s * 0.72, -s * 0.1, s, 0.5)
+    ctx.fillStyle = '#3A2218'; ctx.fill()
+    ctx.fillStyle = 'rgba(239,131,84,0.25)'
+    ctx.fillRect(-s * 0.72, -s * 0.58, s * 1.44, 0.7)
+    ctx.fillRect(-s * 0.72, -s * 0.1,  s, 0.7)
   }
 
   ctx.restore()
 }
+
+function initDevices(now: number): Device[] {
+  return [
+    {
+      type: 'laptop',
+      posX: 0.13, posY: 0.15,
+      cp1Nudge: +0.30, cp2Nudge: +0.18,
+      state: 'connected',
+      stateTimer: now - rand(2000, 6000),
+      connectedDuration: rand(CONNECTED_MIN, CONNECTED_MAX),
+      opacity: 1,
+      nextPulse: now + rand(3000, 6000),
+    },
+    {
+      type: 'phone',
+      posX: 0.12, posY: 0.72,
+      cp1Nudge: -0.25, cp2Nudge: -0.15,
+      state: 'disconnected',
+      stateTimer: now - rand(0, 3000),
+      connectedDuration: rand(CONNECTED_MIN, CONNECTED_MAX),
+      opacity: 0,
+      nextPulse: 0,
+    },
+    {
+      type: 'desktop',
+      posX: 0.82, posY: 0.22,
+      cp1Nudge: -0.20, cp2Nudge: +0.12,
+      state: 'connecting',
+      stateTimer: now - rand(0, 800),
+      connectedDuration: rand(CONNECTED_MIN, CONNECTED_MAX),
+      opacity: 0,
+      nextPulse: 0,
+    },
+  ]
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ClusterOrb() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -231,39 +370,16 @@ export default function ClusterOrb() {
     const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
     if (!ctx) return
 
-    const TYPES: DeviceType[] = ['laptop', 'phone', 'tablet', 'desktop']
-
+    const now0 = performance.now()
     const state = {
-      devices: [] as Device[],
-      pulses: [] as Pulse[],
+      devices: initDevices(now0),
       glowRings: [] as GlowRing[],
-      occupied: new Set<number>(),
-      lastSpawn: 0,
-    }
-
-    function spawn(now: number) {
-      if (state.devices.length >= MAX_DEVICES) return
-      const empty: number[] = []
-      for (let i = 0; i < NUM_SLOTS; i++) if (!state.occupied.has(i)) empty.push(i)
-      if (!empty.length) return
-      const si = empty[Math.floor(Math.random() * empty.length)]
-      state.occupied.add(si)
-      state.devices.push({
-        slotIndex: si,
-        baseAngle: slotAngle(si),
-        driftSeed: Math.random() * 100,
-        opacity: 0,
-        lifetime: MIN_LIFETIME_MS + Math.random() * (MAX_LIFETIME_MS - MIN_LIFETIME_MS),
-        born: now,
-        type: TYPES[Math.floor(Math.random() * 4)],
-        nextPulse: now + 2000 + Math.random() * 3000,
-      })
     }
 
     function resize() {
       const p = canvas.parentElement
       if (!p) return
-      canvas.width = p.clientWidth
+      canvas.width  = p.clientWidth
       canvas.height = p.clientHeight
     }
 
@@ -275,184 +391,141 @@ export default function ClusterOrb() {
 
     function tick(now: number) {
       const W = canvas.width, H = canvas.height
-      const cx = W / 2, cy = H / 2
       const minD = Math.min(W, H)
-      const OR = minD * 0.37    // orbit radius
-      const HR = minD * 0.082   // hub (fruit) radius
+      const cx = W * 0.58, cy = H * 0.52
+      const HR = minD * 0.15
 
-      // Spawn
-      if (now - state.lastSpawn > 1600 && state.devices.length < MAX_DEVICES) {
-        spawn(now)
-        state.lastSpawn = now
-      }
+      // ── Device state machines ─────────────────────────────────────────────
+      state.devices.forEach(d => {
+        const elapsed = now - d.stateTimer
 
-      // Update devices
-      state.devices = state.devices.filter(d => {
-        const age = now - d.born
-        if (age >= d.lifetime) { state.occupied.delete(d.slotIndex); return false }
-        const FADE = 900
-        d.opacity = age < FADE ? age / FADE : age > d.lifetime - FADE ? (d.lifetime - age) / FADE : 1
-        if (now >= d.nextPulse && d.opacity > 0.6) {
-          const a = d.baseAngle + Math.sin(now / 5000 + d.driftSeed) * 0.045
-          state.pulses.push({
-            fromX: cx + Math.cos(a) * OR,
-            fromY: cy + Math.sin(a) * OR,
-            progress: 0,
-            triggered: false,
-          })
-          d.nextPulse = now + 2500 + Math.random() * 4000
+        if (d.state === 'connected') {
+          d.opacity = 1
+          if (elapsed >= d.connectedDuration) {
+            d.state = 'disconnecting'
+            d.stateTimer = now
+            d.connectedDuration = rand(CONNECTED_MIN, CONNECTED_MAX)
+          }
+          if (now >= d.nextPulse) {
+            state.glowRings.push({ born: now, duration: 800 })
+            d.nextPulse = now + rand(3000, 6000)
+          }
+        } else if (d.state === 'disconnecting') {
+          d.opacity = Math.max(0, 1 - elapsed / FADE_MS)
+          if (elapsed >= FADE_MS) {
+            d.opacity = 0; d.state = 'disconnected'; d.stateTimer = now
+          }
+        } else if (d.state === 'disconnected') {
+          d.opacity = 0
+          if (elapsed >= rand(DISCONNECTED_MIN, DISCONNECTED_MAX)) {
+            d.state = 'connecting'; d.stateTimer = now
+          }
+        } else if (d.state === 'connecting') {
+          d.opacity = Math.min(1, elapsed / FADE_MS)
+          if (elapsed >= FADE_MS) {
+            d.opacity = 1; d.state = 'connected'; d.stateTimer = now
+            d.nextPulse = now + rand(2000, 4000)
+          }
         }
-        return true
       })
 
-      // Update pulses
-      state.pulses = state.pulses.filter(p => p.progress < 1.0)
-      state.pulses.forEach(p => {
-        p.progress = Math.min(p.progress + 0.012, 1.0)
-        if (p.progress >= 0.92 && !p.triggered) {
-          p.triggered = true
-          state.glowRings.push({ born: now, duration: 1400 })
-        }
-      })
-
-      // Prune finished glow rings
       state.glowRings = state.glowRings.filter(g => now - g.born < g.duration)
 
-      // ── DRAW ─────────────────────────────────────────────────
+      const powerLevel = (state.devices[0].opacity + state.devices[1].opacity + state.devices[2].opacity) / 3
+
+      // ── DRAW ──────────────────────────────────────────────────────────────
       ctx.clearRect(0, 0, W, H)
-      ctx.fillStyle = '#EDE5D8'
-      ctx.fillRect(0, 0, W, H)
 
-      // Fine background grid
-      const GS = Math.round(minD / 22)
-      ctx.strokeStyle = 'rgba(18,11,9,0.038)'
-      ctx.lineWidth = 0.5
-      for (let x = cx % GS; x < W; x += GS) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke()
-      }
-      for (let y = cy % GS; y < H; y += GS) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke()
-      }
+      const flowOffset = -(now / 55) % 20
 
-      // Faint concentric rings for depth
-      const ringFracs = [0.12, 0.22, 0.32, 0.47, 0.60, 0.75, 0.92]
-      ringFracs.forEach((f, i) => {
-        ctx.beginPath()
-        ctx.arc(cx, cy, (minD / 2) * f, 0, Math.PI * 2)
-        ctx.strokeStyle = `rgba(18,11,9,${0.035 + i * 0.006})`
-        ctx.lineWidth = 0.7
-        ctx.stroke()
-      })
-
-      // Dashed orbit ring
-      ctx.beginPath()
-      ctx.arc(cx, cy, OR, 0, Math.PI * 2)
-      ctx.strokeStyle = 'rgba(239,131,84,0.22)'
-      ctx.lineWidth = 1
-      ctx.setLineDash([5, 7])
-      ctx.stroke()
-      ctx.setLineDash([])
-
-      // Radar sweep arm (slow, ~15 s per rotation)
-      const ra = (now / 1000) * 0.42
-      ctx.save()
-      ctx.translate(cx, cy)
-      const SWEEP_STEPS = 28
-      const SWEEP_SPAN = Math.PI * 0.38
-      for (let i = 0; i < SWEEP_STEPS; i++) {
-        const a = ra - (i / SWEEP_STEPS) * SWEEP_SPAN
-        ctx.beginPath()
-        ctx.moveTo(0, 0)
-        ctx.lineTo(Math.cos(a) * OR * 1.12, Math.sin(a) * OR * 1.12)
-        ctx.strokeStyle = `rgba(239,131,84,${((SWEEP_STEPS - i) / SWEEP_STEPS) * 0.11})`
-        ctx.lineWidth = 1.8
-        ctx.stroke()
-      }
-      ctx.beginPath()
-      ctx.moveTo(0, 0)
-      ctx.lineTo(Math.cos(ra) * OR * 1.12, Math.sin(ra) * OR * 1.12)
-      ctx.strokeStyle = 'rgba(239,131,84,0.52)'
-      ctx.lineWidth = 1.2
-      ctx.stroke()
-      ctx.restore()
-
-      // Slot markers on orbit
-      for (let i = 0; i < NUM_SLOTS; i++) {
-        const a = slotAngle(i)
-        ctx.beginPath()
-        ctx.arc(cx + Math.cos(a) * OR, cy + Math.sin(a) * OR, 2, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(239,131,84,0.22)'
-        ctx.fill()
-      }
-
-      // Dashed connection lines: device → hub
+      // 1. Wires
       state.devices.forEach(d => {
-        const a = d.baseAngle + Math.sin(now / 5000 + d.driftSeed) * 0.045
-        const dx = cx + Math.cos(a) * OR, dy = cy + Math.sin(a) * OR
+        if (d.opacity < 0.01) return
+        const bz = resolveDeviceBezier(d, W, H, cx, cy)
+
+        // Soft outer glow
         ctx.beginPath()
-        ctx.moveTo(cx, cy)
-        ctx.lineTo(dx, dy)
-        ctx.strokeStyle = `rgba(239,131,84,${0.3 * d.opacity})`
-        ctx.lineWidth = 1
-        ctx.setLineDash([4, 5])
+        ctx.moveTo(bz.p0x, bz.p0y)
+        ctx.bezierCurveTo(bz.p1x, bz.p1y, bz.p2x, bz.p2y, bz.p3x, bz.p3y)
+        ctx.strokeStyle = `rgba(239,131,84,${0.07 * d.opacity})`
+        ctx.lineWidth = 7
+        ctx.setLineDash([])
+        ctx.stroke()
+
+        // Base wire
+        ctx.beginPath()
+        ctx.moveTo(bz.p0x, bz.p0y)
+        ctx.bezierCurveTo(bz.p1x, bz.p1y, bz.p2x, bz.p2y, bz.p3x, bz.p3y)
+        ctx.strokeStyle = `rgba(239,131,84,${0.18 * d.opacity})`
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([])
+        ctx.stroke()
+
+        // Animated current
+        ctx.beginPath()
+        ctx.moveTo(bz.p0x, bz.p0y)
+        ctx.bezierCurveTo(bz.p1x, bz.p1y, bz.p2x, bz.p2y, bz.p3x, bz.p3y)
+        ctx.strokeStyle = `rgba(239,131,84,${0.65 * d.opacity})`
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([5, 11])
+        ctx.lineDashOffset = flowOffset
         ctx.stroke()
         ctx.setLineDash([])
+        ctx.lineDashOffset = 0
       })
 
-      // Glow rings triggered by arriving pulses
+      // 2. Glow rings
       state.glowRings.forEach(g => {
         const t = (now - g.born) / g.duration
-        const r = HR + HR * 3.4 * t
         ctx.beginPath()
-        ctx.arc(cx, cy, r, 0, Math.PI * 2)
-        ctx.strokeStyle = `rgba(239,131,84,${0.75 * (1 - t)})`
-        ctx.lineWidth = 2.5 * (1 - t * 0.7)
+        ctx.arc(cx, cy, HR * 0.85 + HR * 1.2 * t, 0, Math.PI * 2)
+        ctx.strokeStyle = `rgba(239,131,84,${0.45 * (1 - t) * powerLevel})`
+        ctx.lineWidth = 1.5 * (1 - t)
         ctx.stroke()
       })
 
-      // Clementine hub
-      drawClementine(ctx, cx, cy, HR)
+      // 3. Ambient glow (scales with power, dims when withered)
+      if (powerLevel > 0.05) {
+        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, HR * 2.6)
+        grd.addColorStop(0, `rgba(239,131,84,${0.18 * powerLevel})`)
+        grd.addColorStop(1, 'rgba(239,131,84,0)')
+        ctx.beginPath()
+        ctx.arc(cx, cy, HR * 2.6, 0, Math.PI * 2)
+        ctx.fillStyle = grd
+        ctx.fill()
+      }
 
-      // Device icons
+      // 4. Clementine (state-driven illustration)
+      drawClementine(ctx, cx, cy, HR, powerLevel, now)
+
+      // 5. Compute bar
+      const barW = W * 0.20
+      const barH = 6
+      const barR = 3
+      const barX = cx - barW / 2
+      const barY = cy - HR * lv(0.84, 0.90, powerLevel) - 30
+
+      ctx.fillStyle = 'rgba(18,11,9,0.28)'
+      ctx.font = '700 7.5px Inter, system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('C O M P U T E', cx, barY - 7)
+
+      ctx.beginPath()
+      rrect(ctx, barX, barY, barW, barH, barR)
+      ctx.fillStyle = 'rgba(18,11,9,0.08)'
+      ctx.fill()
+
+      ctx.save()
+      ctx.beginPath()
+      rrect(ctx, barX, barY, barW, barH, barR)
+      ctx.clip()
+      ctx.fillStyle = computeBarColor(powerLevel)
+      ctx.fillRect(barX, barY, barW * powerLevel, barH)
+      ctx.restore()
+
+      // 6. Devices
       state.devices.forEach(d => {
-        const a = d.baseAngle + Math.sin(now / 5000 + d.driftSeed) * 0.045
-        drawDevice(ctx, cx + Math.cos(a) * OR, cy + Math.sin(a) * OR, d.type, d.opacity)
-      })
-
-      // Pulse dots with tails
-      state.pulses.forEach(p => {
-        const t = p.progress
-        const px = p.fromX + (cx - p.fromX) * t
-        const py = p.fromY + (cy - p.fromY) * t
-        const alpha = t < 0.88 ? 1 : 1 - (t - 0.88) / 0.12
-
-        const vx = cx - p.fromX, vy = cy - p.fromY
-        const vlen = Math.sqrt(vx * vx + vy * vy)
-        const tailLen = 18
-        const tx = px - (vx / vlen) * tailLen
-        const ty = py - (vy / vlen) * tailLen
-
-        const tg = ctx.createLinearGradient(tx, ty, px, py)
-        tg.addColorStop(0, 'rgba(239,131,84,0)')
-        tg.addColorStop(1, `rgba(239,131,84,${alpha * 0.85})`)
-        ctx.beginPath()
-        ctx.moveTo(tx, ty)
-        ctx.lineTo(px, py)
-        ctx.strokeStyle = tg
-        ctx.lineWidth = 2
-        ctx.stroke()
-
-        // Glow halo
-        ctx.beginPath()
-        ctx.arc(px, py, 6, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(239,131,84,${alpha * 0.22})`
-        ctx.fill()
-
-        // Bright dot
-        ctx.beginPath()
-        ctx.arc(px, py, 3.2, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(255,190,110,${alpha})`
-        ctx.fill()
+        drawDevice(ctx, d.posX * W, d.posY * H, d.type, d.opacity)
       })
 
       rafId = requestAnimationFrame(tick)

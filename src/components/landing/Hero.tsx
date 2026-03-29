@@ -127,7 +127,7 @@ export default function Hero() {
           transition={{ duration: 1.1, delay: 0.7, ease: 'easeOut' }}
           className="hidden lg:flex justify-end lg:translate-x-14 xl:translate-x-20"
         >
-          <div className="rounded-2xl overflow-hidden bg-[#EDE5D8] aspect-square w-full max-w-[520px]">
+          <div className="aspect-square w-full max-w-[520px]">
             <ClusterOrb />
           </div>
         </motion.div>
