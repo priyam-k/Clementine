@@ -214,7 +214,7 @@ export default function HeroMeshViz() {
     function tick() {
       raf = requestAnimationFrame(tick)
       const now = performance.now() - start
-      const W = canvas.width, H = canvas.height
+      const W = c.width, H = c.height
       ctx.clearRect(0, 0, W, H)
 
       const hx = W * 0.50, hy = H * 0.50
