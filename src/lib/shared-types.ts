@@ -74,6 +74,7 @@ export interface WireWorker {
   id: string;
   name: string;
   device: string;
+  carbonIntensity?: number;
   type: WorkerType;
   status: WorkerStatus;
   capabilities: string[];
@@ -97,6 +98,8 @@ export interface WireTask {
   assignedWorkerId?: string;
   completedByWorkerId?: string;
   completedByWorkerName?: string;
+  completedCarbonIntensity?: number;
+  estimatedCarbonSavedGrams?: number;
   inputPayload: Record<string, unknown>;
   outputPayload?: Record<string, unknown>;
   startedAt?: number;
@@ -133,6 +136,7 @@ export interface WireSession {
   joinUrl: string;
   startedAt: number;
   hostName: string;
+  schedulerBias: number;
 }
 
 // ─── Socket event maps ────────────────────────────────────────────────────────
@@ -143,6 +147,7 @@ export interface ServerToClientEvents {
     workers: WireWorker[];
     jobs: WireJob[];
   }) => void;
+  "worker:self": (worker: WireWorker) => void;
   "workers:update": (workers: WireWorker[]) => void;
   "job:created": (job: WireJob) => void;
   "job:update": (job: WireJob) => void;
@@ -154,18 +159,21 @@ export interface ServerToClientEvents {
 
 export interface ClientToServerEvents {
   "host:register": (data: { sessionCode?: string }) => void;
+  "scheduler:bias:set": (data: { sessionCode: string; bias: number }) => void;
   "worker:join": (data: {
     sessionCode: string;
     name: string;
     device: string;
+    lat: number;
+    lon: number;
   }) => void;
   "worker:profile": (data: {
     device?: string;
     telemetry?: WorkerTelemetry;
     benchmark?: WorkerBenchmark;
   }) => void;
-  "job:submit": (data: { command: string }) => void;
-  "fractal:submit": (config: FractalJobConfig) => void;
+  "job:submit": (data: { command: string; sessionCode?: string }) => void;
+  "fractal:submit": (data: { config: FractalJobConfig; sessionCode?: string }) => void;
   "task:progress": (data: { taskId: string; progress: number }) => void;
   "task:complete": (data: {
     taskId: string;

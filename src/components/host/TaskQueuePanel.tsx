@@ -6,6 +6,7 @@ import { JobStatusBadge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { formatRelativeTime } from "@/lib/mock-data";
 import { useState } from "react";
+import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
 interface TaskQueuePanelProps {
   jobs: Job[];
@@ -57,6 +58,9 @@ function JobRow({ job }: { job: Job }) {
           <div className="flex items-center gap-4 mt-2">
             <span className="text-[10px] text-[#4A3935]/50 font-[Inter,sans-serif]">
               {job.completedSubtasks}/{job.totalSubtasks} subtasks
+            </span>
+            <span className="text-[10px] text-green-700 font-[Inter,sans-serif]">
+              {formatCarbonSaved(job.estimatedCarbonSavedGrams ?? 0)} saved
             </span>
             {job.startedAt && (
               <span className="text-[10px] text-[#4A3935]/40 font-[Inter,sans-serif]">

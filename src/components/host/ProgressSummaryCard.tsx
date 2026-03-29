@@ -1,6 +1,7 @@
 "use client";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import type { Job } from "@/lib/types";
+import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
 interface ProgressSummaryCardProps {
   job: Job;
@@ -43,6 +44,15 @@ export function ProgressSummaryCard({ job }: ProgressSummaryCardProps) {
             </p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-4 bg-[#F5F1EE] rounded-sm px-4 py-3 flex items-center justify-between">
+        <p className="text-[9px] font-black uppercase tracking-widest text-[#4A3935]/50 font-[Inter,sans-serif]">
+          Net Carbon Saved
+        </p>
+        <p className="text-sm font-black text-green-700">
+          {formatCarbonSaved(job.estimatedCarbonSavedGrams ?? 0)}
+        </p>
       </div>
 
       {/* Subtask progress bars for running */}

@@ -14,6 +14,10 @@ import type {
 export interface ServerWorker {
   id: string;
   socketId: string;
+  lat?: number;
+  lon?: number;
+  carbonIntensity?: number;
+  activeTasks?: number;
   name: string;
   device: string;
   type: WorkerType;
@@ -47,6 +51,8 @@ export interface ServerTask {
   assignedWorkerId?: string;
   completedByWorkerId?: string;
   completedByWorkerName?: string;
+  completedCarbonIntensity?: number;
+  estimatedCarbonSavedGrams?: number;
   inputPayload: Record<string, unknown>;
   outputPayload?: Record<string, unknown>;
   startedAt?: number;
@@ -76,4 +82,5 @@ export interface ServerSession {
   hostName: string;
   joinUrl: string;
   startedAt: number;
+  schedulerBias: number;
 }

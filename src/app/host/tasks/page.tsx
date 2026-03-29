@@ -10,6 +10,7 @@ import {
   ChevronDown, Activity, BarChart2, Zap, ListTodo, AlertTriangle, Circle, Download,
 } from "lucide-react";
 import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
+import { formatCarbonSaved, getJobCarbonSavedGrams, getTaskCarbonSavedGrams } from "@/lib/carbon-metrics";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ function JobCard({ job }: { job: WireJob }) {
   const completedCount = job.tasks.filter((t) => t.status === "completed").length;
   const failedCount = job.tasks.filter((t) => t.status === "failed").length;
   const duration = job.completedAt && job.startedAt ? job.completedAt - job.startedAt : null;
+  const carbonSaved = getJobCarbonSavedGrams(job);
 
   return (
     <div className={`border rounded-sm transition-all ${job.status === "running" ? "border-[#EF8354]/30" : "border-[#120B09]/5"} bg-white`}>
@@ -107,6 +109,9 @@ function JobCard({ job }: { job: WireJob }) {
             <span className="text-[9px] text-[#4A3935]/40 font-[Inter,sans-serif]">
               {completedCount}/{job.tasks.length} tasks
             </span>
+            <span className="text-[9px] text-green-700 font-black font-[Inter,sans-serif]">
+              {formatCarbonSaved(carbonSaved)} saved
+            </span>
             {failedCount > 0 && (
               <span className="text-[9px] text-[#BA1A1A] font-black font-[Inter,sans-serif]">{failedCount} failed</span>
             )}
@@ -123,12 +128,13 @@ function JobCard({ job }: { job: WireJob }) {
       {open && job.tasks.length > 0 && (
         <div className="border-t border-[#120B09]/5">
           <div className="grid grid-cols-12 gap-3 px-5 py-2 bg-[#F5F1EE]">
-            {["Subtask", "Status", "Worker", "Progress", "Duration"].map((h, i) => (
+            {["Subtask", "Status", "Worker", "Carbon", "Duration"].map((h, i) => (
               <p key={h} className={`text-[8px] font-black uppercase tracking-widest text-[#4A3935]/40 font-[Inter,sans-serif] ${i === 0 ? "col-span-4" : i === 1 ? "col-span-2" : i === 2 ? "col-span-2" : i === 3 ? "col-span-2" : "col-span-2"}`}>{h}</p>
             ))}
           </div>
           {job.tasks.map((task) => {
             const dur = task.completedAt && task.startedAt ? task.completedAt - task.startedAt : null;
+            const taskCarbonSaved = getTaskCarbonSavedGrams(task);
             return (
               <div key={task.id} className="grid grid-cols-12 gap-3 items-center px-5 py-2.5 border-t border-[#120B09]/5 hover:bg-[#FAFAF8] transition-all">
                 <div className="col-span-4 flex items-center gap-2">
@@ -152,7 +158,9 @@ function JobCard({ job }: { job: WireJob }) {
                   )}
                 </div>
                 <div className="col-span-2">
-                  <ProgressBar value={task.progress} height="sm" />
+                  <span className={`text-[9px] font-black font-[Inter,sans-serif] ${taskCarbonSaved >= 0 ? "text-green-700" : "text-[#BA1A1A]"}`}>
+                    {formatCarbonSaved(taskCarbonSaved)}
+                  </span>
                 </div>
                 <div className="col-span-2 text-right">
                   <span className="text-[9px] text-[#4A3935]/50 font-[Inter,sans-serif]">
@@ -170,6 +178,13 @@ function JobCard({ job }: { job: WireJob }) {
         <div className="border-t border-[#120B09]/5 px-5 py-4 bg-[#FAFAF8]">
           <p className="text-[9px] font-black uppercase tracking-widest text-green-700 font-[Inter,sans-serif] mb-1">Result</p>
           <p className="text-xs font-medium text-[#4A3935]">{job.result.summary}</p>
+          <p className="text-[10px] font-black text-green-700 font-[Inter,sans-serif] mt-2">
+            Net carbon saved: {formatCarbonSaved(
+              typeof job.result.metrics.netCarbonSavedGrams === "number"
+                ? job.result.metrics.netCarbonSavedGrams
+                : carbonSaved
+            )}
+          </p>
         </div>
       )}
     </div>
@@ -189,6 +204,10 @@ export default function TasksPage() {
   const runningJobs = useMemo(() => jobs.filter((j) => j.status === "running" || j.status === "decomposing" || j.status === "reducing"), [jobs]);
   const avgDur = useMemo(() => avgTaskDuration(jobs), [jobs]);
   const sr = useMemo(() => successRate(jobs), [jobs]);
+  const totalCarbonSaved = useMemo(
+    () => jobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0),
+    [jobs]
+  );
 
   // Job type distribution
   const typeDistribution = useMemo(() => {
@@ -256,6 +275,9 @@ export default function TasksPage() {
               <h1 className="text-5xl font-black text-[#120B09] tracking-tighter uppercase">Task Queue</h1>
               <p className="text-[#4A3950]/50 text-xs font-bold uppercase tracking-widest mt-2 font-[Inter,sans-serif]">
                 {jobs.length} job{jobs.length !== 1 ? "s" : ""} · {allTasks.length} subtasks
+              </p>
+              <p className="text-green-700 text-xs font-bold uppercase tracking-widest mt-1 font-[Inter,sans-serif]">
+                Net carbon saved: {formatCarbonSaved(totalCarbonSaved)}
               </p>
             </div>
             <button

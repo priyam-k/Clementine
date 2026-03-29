@@ -34,6 +34,7 @@ export function createSession(hostSocketId: string, hostName: string, joinUrl: s
     hostName,
     joinUrl,
     startedAt: Date.now(),
+    schedulerBias: 0.5,
   };
   sessions.set(code, session);
   sessionToHost.set(code, hostSocketId);
@@ -59,6 +60,26 @@ export function getHostSocketForSession(code: string): string | undefined {
   return sessionToHost.get(code);
 }
 
+export function updateSessionHostSocket(code: string, hostSocketId: string): ServerSession | undefined {
+  const session = sessions.get(code);
+  if (!session) return undefined;
+  const updated = { ...session, hostSocketId };
+  sessions.set(code, updated);
+  sessionToHost.set(code, hostSocketId);
+  return updated;
+}
+
+export function updateSessionSchedulerBias(code: string, schedulerBias: number): ServerSession | undefined {
+  const session = sessions.get(code);
+  if (!session) return undefined;
+  const updated = {
+    ...session,
+    schedulerBias: Math.min(Math.max(schedulerBias, 0), 1),
+  };
+  sessions.set(code, updated);
+  return updated;
+}
+
 // ─── Worker ops ──────────────────────────────────────────────────────────────
 
 export function registerWorker(socketId: string, data: {
@@ -67,12 +88,20 @@ export function registerWorker(socketId: string, data: {
   sessionCode: string;
   isHost?: boolean;
   telemetry?: WorkerTelemetry;
+  lat?: number;
+  lon?: number;
+  carbonIntensity?: number;
+  activeTasks?: number;
 }): ServerWorker {
   const id = `wkr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const now = Date.now();
   const worker: ServerWorker = {
     id,
     socketId,
+    lat: data.lat,
+    lon: data.lon,
+    carbonIntensity: data.carbonIntensity,
+    activeTasks: data.activeTasks ?? 0,
     name: data.name,
     device: data.device,
     type: "browser",
@@ -119,6 +148,24 @@ export function updateWorker(id: string, updates: Partial<ServerWorker>): Server
   const updated = { ...w, ...updates, lastSeenAt: Date.now() };
   workers.set(id, updated);
   return updated;
+}
+
+export function rebindWorkerSocket(workerId: string, socketId: string): ServerWorker | undefined {
+  const worker = workers.get(workerId);
+  if (!worker) return undefined;
+
+  socketToWorker.forEach((mappedWorkerId, mappedSocketId) => {
+    if (mappedWorkerId === workerId) {
+      socketToWorker.delete(mappedSocketId);
+    }
+  });
+
+  socketToWorker.set(socketId, workerId);
+  return updateWorker(workerId, {
+    socketId,
+    status: worker.status === "offline" ? "idle" : worker.status,
+    lastHeartbeatAt: Date.now(),
+  });
 }
 
 export function markWorkerOffline(socketId: string): ServerWorker | undefined {
@@ -231,6 +278,7 @@ export function toWireWorker(w: ServerWorker): WireWorker {
     id: w.id,
     name: w.name,
     device: w.device,
+    carbonIntensity: w.carbonIntensity,
     type: w.type,
     status: w.status,
     capabilities: w.capabilities,
@@ -270,6 +318,8 @@ export function toWireTask(t: ServerTask): WireTask {
     assignedWorkerId: t.assignedWorkerId,
     completedByWorkerId: t.completedByWorkerId,
     completedByWorkerName: t.completedByWorkerName,
+    completedCarbonIntensity: t.completedCarbonIntensity,
+    estimatedCarbonSavedGrams: t.estimatedCarbonSavedGrams,
     inputPayload: t.inputPayload,
     outputPayload: t.outputPayload,
     startedAt: t.startedAt,

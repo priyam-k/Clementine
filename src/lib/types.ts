@@ -41,6 +41,7 @@ export interface Job {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  estimatedCarbonSavedGrams?: number;
   subtasks: SubTask[];
   result?: JobResult;
 }
@@ -51,6 +52,7 @@ export interface JobResult {
   durationMs: number;
   workerCount: number;
   dataProcessed: string;
+  estimatedCarbonSavedGrams?: number;
 }
 
 export interface CommandEntry {

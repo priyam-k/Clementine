@@ -24,8 +24,10 @@ export interface HostSessionState {
   jobs: WireJob[];
   fractalTiles: FractalTileResultPayload[];
   latestResult: WireResult | null;
+  schedulerBias: number;
   submitJob: (command: string) => void;
   submitFractalJob: (config: FractalJobConfig) => void;
+  setSchedulerBias: (bias: number) => void;
   reconnect: () => void;
 }
 
@@ -43,6 +45,7 @@ export function useHostSession(): HostSessionState {
   const [jobs, setJobs] = useState<WireJob[]>([]);
   const [fractalTiles, setFractalTiles] = useState<FractalTileResultPayload[]>([]);
   const [latestResult, setLatestResult] = useState<WireResult | null>(null);
+  const [schedulerBias, setSchedulerBiasState] = useState(0.5);
 
   // Persist session code across reconnects
   const sessionCodeRef = useRef<string | undefined>(
@@ -123,6 +126,7 @@ export function useHostSession(): HostSessionState {
         window.localStorage.setItem(HOST_SESSION_STORAGE_KEY, sess.code);
       }
       setSession(sess);
+      setSchedulerBiasState(sess.schedulerBias);
       setWorkers(ws);
       setJobs(js);
       setFractalTiles([]);
@@ -222,11 +226,17 @@ export function useHostSession(): HostSessionState {
 
   const submitJob = useCallback((command: string) => {
     if (!command.trim()) return;
-    getSocket().emit("job:submit", { command: command.trim() });
+    getSocket().emit("job:submit", {
+      command: command.trim(),
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
 
   const submitFractalJob = useCallback((config: FractalJobConfig) => {
-    getSocket().emit("fractal:submit", config);
+    getSocket().emit("fractal:submit", {
+      config,
+      sessionCode: sessionCodeRef.current,
+    });
   }, []);
 
   const reconnect = useCallback(() => {
@@ -234,5 +244,31 @@ export function useHostSession(): HostSessionState {
     if (!socket.connected) socket.connect();
   }, []);
 
-  return { isConnected, session, workers, jobs, fractalTiles, latestResult, submitJob, submitFractalJob, reconnect };
+  const setSchedulerBias = useCallback((bias: number) => {
+    const normalizedBias = Math.min(Math.max(bias, 0), 1);
+    setSchedulerBiasState(normalizedBias);
+    setSession((prev) => (prev ? { ...prev, schedulerBias: normalizedBias } : prev));
+
+    const currentSessionCode = sessionCodeRef.current;
+    if (!currentSessionCode) return;
+
+    getSocket().emit("scheduler:bias:set", {
+      sessionCode: currentSessionCode,
+      bias: normalizedBias,
+    });
+  }, []);
+
+  return {
+    isConnected,
+    session,
+    workers,
+    jobs,
+    fractalTiles,
+    latestResult,
+    schedulerBias,
+    submitJob,
+    submitFractalJob,
+    setSchedulerBias,
+    reconnect,
+  };
 }

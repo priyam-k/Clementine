@@ -18,6 +18,7 @@ import {
   createJob,
   getJob,
   getTask,
+  getWorker,
   updateTask,
   updateJob,
   updateWorker,
@@ -26,6 +27,9 @@ import {
   getTasksForJob,
   getHostSocketForSession,
   createTask,
+  updateSessionHostSocket,
+  updateSessionSchedulerBias,
+  rebindWorkerSocket,
 } from "./store";
 import { decomposeJob, detectJobType, deriveTitle } from "./decomposer";
 import { runScheduler } from "./scheduler";
@@ -34,6 +38,8 @@ import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
 import { logTaskResult, persistJobSnapshot, persistTaskSnapshots } from "./mongo";
 import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
+import { handleWorkerJoin, type Worker as SchedulerWorker } from "./taskScheduler";
+import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
 
 type IO = IOServer<ClientToServerEvents, ServerToClientEvents>;
 type Sock = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -72,6 +78,16 @@ function mergeTelemetry(
 
 export function setupSocketHandlers(io: IO, port: number) {
   const localIP = getLocalIP();
+  const sessionWorkerState = new Map<string, Map<string, SchedulerWorker>>();
+
+  const getSessionWorkerState = (sessionCode: string): Map<string, SchedulerWorker> => {
+    let state = sessionWorkerState.get(sessionCode);
+    if (!state) {
+      state = new Map<string, SchedulerWorker>();
+      sessionWorkerState.set(sessionCode, state);
+    }
+    return state;
+  };
 
   const persistJobAndTasks = (jobId: string) => {
     const job = getJob(jobId);
@@ -100,8 +116,8 @@ export function setupSocketHandlers(io: IO, port: number) {
         session.joinUrl = `http://${localIP}:${port}/join?code=${session.code}`;
         console.log(`[host] New session created: ${session.code}`);
       } else {
-        // Update host socket (re-connect case)
-        session.hostSocketId = socket.id;
+        // Update host socket and fast lookup map on re-connect
+        session = updateSessionHostSocket(session.code, socket.id) ?? session;
         console.log(`[host] Re-registered for session: ${session.code}`);
       }
 
@@ -114,6 +130,8 @@ export function setupSocketHandlers(io: IO, port: number) {
           sessionCode: session.code,
           isHost: true,
         });
+      } else {
+        rebindWorkerSocket(existingHostWorker.id, socket.id);
       }
 
       const workers = getWorkersForSession(session.code).map(toWireWorker);
@@ -125,14 +143,27 @@ export function setupSocketHandlers(io: IO, port: number) {
           joinUrl: session.joinUrl,
           startedAt: session.startedAt,
           hostName: session.hostName,
+          schedulerBias: session.schedulerBias,
         },
         workers,
         jobs,
       });
     });
 
+    socket.on("scheduler:bias:set", ({ sessionCode, bias }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? updateSessionHostSocket(sessionCode, socket.id);
+      if (!session) {
+        socket.emit("error", { message: "Host session not found" });
+        return;
+      }
+
+      updateSessionSchedulerBias(session.code, bias);
+    });
+
     // ── Worker joins ──────────────────────────────────────────────────────────
-    socket.on("worker:join", ({ sessionCode, name, device }) => {
+    socket.on("worker:join", async ({ sessionCode, name, device, lat, lon }) => {
       const session = getSession(sessionCode);
       if (!session) {
         socket.emit("error", { message: `Session ${sessionCode} not found` });
@@ -143,17 +174,41 @@ export function setupSocketHandlers(io: IO, port: number) {
       const existing = getWorkerBySocket(socket.id);
       if (existing && existing.sessionCode === sessionCode && existing.status !== "offline") {
         const workers = getWorkersForSession(sessionCode).map(toWireWorker);
+        socket.emit("worker:self", toWireWorker(existing));
         socket.emit("workers:update", workers);
         const hostSocketId = getHostSocketForSession(sessionCode);
         if (hostSocketId) runScheduler(io, sessionCode, hostSocketId);
         return;
       }
 
-      registerWorker(socket.id, { name, device, sessionCode });
+      const registeredWorker = registerWorker(socket.id, {
+        name,
+        device,
+        sessionCode,
+        lat,
+        lon,
+        activeTasks: 0,
+      });
+      const schedulerWorker = await handleWorkerJoin({
+        io,
+        socket,
+        sessionCode,
+        state: getSessionWorkerState(sessionCode),
+        workerId: registeredWorker.id,
+        lat,
+        lon,
+      });
+      updateWorker(registeredWorker.id, {
+        lat: schedulerWorker.lat,
+        lon: schedulerWorker.lon,
+        carbonIntensity: schedulerWorker.carbonIntensity,
+        activeTasks: schedulerWorker.activeTasks,
+      });
       console.log(`[worker] "${name}" joined session ${sessionCode}`);
 
       // Ack the worker
       const workers = getWorkersForSession(sessionCode).map(toWireWorker);
+      socket.emit("worker:self", toWireWorker(getWorker(registeredWorker.id) ?? registeredWorker));
       socket.emit("workers:update", workers);
 
       // Notify host
@@ -178,6 +233,10 @@ export function setupSocketHandlers(io: IO, port: number) {
         benchmark: benchmark ?? worker.benchmark,
         lastHeartbeatAt: Date.now(),
       });
+      const updatedWorker = getWorker(worker.id);
+      if (updatedWorker) {
+        socket.emit("worker:self", toWireWorker(updatedWorker));
+      }
 
       const hostSocketId = getHostSocketForSession(worker.sessionCode);
       if (hostSocketId) {
@@ -189,8 +248,10 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Job submitted (text command) ──────────────────────────────────────────
-    socket.on("job:submit", ({ command }) => {
-      const session = getSessionByHostSocket(socket.id);
+    socket.on("job:submit", ({ command, sessionCode }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
       if (!session) {
         socket.emit("error", { message: "Host session not found" });
         return;
@@ -272,8 +333,10 @@ export function setupSocketHandlers(io: IO, port: number) {
     });
 
     // ── Fractal job submitted directly ────────────────────────────────────────
-    socket.on("fractal:submit", (config: FractalJobConfig) => {
-      const session = getSessionByHostSocket(socket.id);
+    socket.on("fractal:submit", ({ config, sessionCode }) => {
+      const session =
+        getSessionByHostSocket(socket.id)
+        ?? (sessionCode ? updateSessionHostSocket(sessionCode, socket.id) : undefined);
       if (!session) {
         socket.emit("error", { message: "Host session not found" });
         return;
@@ -356,12 +419,19 @@ export function setupSocketHandlers(io: IO, port: number) {
         taskForType?.jobType === "fractal-render" && input
           ? input.tileWidth * input.tileHeight
           : 0;
+      const completedCarbonIntensity = worker.carbonIntensity ?? 250;
+      const estimatedCarbonSavedGrams = estimateTaskCarbonSavedGrams(
+        taskDurationMs,
+        completedCarbonIntensity
+      );
 
       updateTask(taskId, {
         status: "completed",
         progress: 100,
         completedByWorkerId: worker.id,
         completedByWorkerName: worker.name,
+        completedCarbonIntensity,
+        estimatedCarbonSavedGrams,
         outputPayload: storedOutput,
         completedAt: now,
       });
@@ -384,6 +454,7 @@ export function setupSocketHandlers(io: IO, port: number) {
       updateWorker(worker.id, {
         status: "idle",
         currentTaskId: undefined,
+        activeTasks: Math.max((worker.activeTasks ?? 1) - 1, 0),
         tasksCompleted: worker.tasksCompleted + 1,
         lastTaskDurationMs: taskDurationMs,
         totalBusyMs: worker.totalBusyMs + taskDurationMs,
@@ -522,6 +593,7 @@ export function setupSocketHandlers(io: IO, port: number) {
       // Worker disconnected
       const offlineWorker = markWorkerOffline(socket.id);
       if (offlineWorker) {
+        getSessionWorkerState(offlineWorker.sessionCode).delete(socket.id);
         const hostSocketId = getHostSocketForSession(offlineWorker.sessionCode);
         if (hostSocketId) {
           const workers = getWorkersForSession(offlineWorker.sessionCode).map(toWireWorker);
@@ -534,6 +606,9 @@ export function setupSocketHandlers(io: IO, port: number) {
             status: "queued",
             assignedWorkerId: undefined,
             progress: 0,
+          });
+          updateWorker(offlineWorker.id, {
+            activeTasks: 0,
           });
           const task = getTask(offlineWorker.currentTaskId);
           if (task) persistJobAndTasks(task.jobId);

@@ -1,5 +1,6 @@
 import type { ServerJob, ServerTask } from "./types";
 import type { WireResult } from "../lib/shared-types";
+import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
 
 // ─── Result reducer: aggregates all task outputs into a final WireResult ──────
 
@@ -17,6 +18,7 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
   // Aggregate metrics from task outputs
   let totalOps = 0;
   let totalData = 0;
+  let totalCarbonSavedGrams = 0;
   const outputLines: string[] = [];
 
   for (const task of completedTasks) {
@@ -28,6 +30,13 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
 
     totalOps += opsCount;
     totalData += batchSize;
+    totalCarbonSavedGrams +=
+      typeof task.estimatedCarbonSavedGrams === "number"
+        ? task.estimatedCarbonSavedGrams
+        : estimateTaskCarbonSavedGrams(
+            task.completedAt && task.startedAt ? task.completedAt - task.startedAt : 0,
+            task.completedCarbonIntensity ?? 250
+          );
 
     const efficiency = typeof output?.efficiency === "number"
       ? (output.efficiency * 100).toFixed(1)
@@ -55,6 +64,9 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
   outputLines.push(
     `→ Total: ${totalOps.toLocaleString()} ops across ${workerIds.size} worker${workerIds.size !== 1 ? "s" : ""} | Success: ${successRate}%`
   );
+  outputLines.push(
+    `→ Net carbon saved: ${totalCarbonSavedGrams >= 0 ? "+" : ""}${totalCarbonSavedGrams.toFixed(1)} gCO2e`
+  );
 
   const summary =
     `${completedTasks.length}/${tasks.length} subtasks completed across ` +
@@ -77,6 +89,7 @@ export function reduceJobResults(job: ServerJob, tasks: ServerTask[]): WireResul
       durationMs,
       completedTasks: completedTasks.length,
       failedTasks: failedTasks.length,
+      netCarbonSavedGrams: Math.round(totalCarbonSavedGrams * 10) / 10,
     },
   };
 }

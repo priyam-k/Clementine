@@ -1,14 +1,15 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { WireWorker } from "@/lib/shared-types";
-import { Cpu, Database, HardDrive, Users, Zap } from "lucide-react";
+import type { WireJob, WireWorker } from "@/lib/shared-types";
+import { Cpu, Database, Leaf, Users, Zap } from "lucide-react";
+import { formatCarbonSaved, getJobCarbonSavedGrams } from "@/lib/carbon-metrics";
 
 interface MetricSnapshot {
   cpuPressure: number;
   memoryPoolGb: number;
   gpuUsage: number;
-  storageUsage: number;
   activeWorkers: number;
+  carbonSavedGrams: number;
 }
 
 const HISTORY_LEN = 30;
@@ -133,14 +134,14 @@ function MetricNumber({
   );
 }
 
-export function GlobalMetricsPanel({ workers }: { workers: WireWorker[] }) {
+export function GlobalMetricsPanel({ workers, jobs }: { workers: WireWorker[]; jobs: WireJob[] }) {
   const [history, setHistory] = useState<MetricSnapshot[]>(() =>
     Array.from({ length: HISTORY_LEN }, () => ({
       cpuPressure: 0,
       memoryPoolGb: 0,
       gpuUsage: 0,
-      storageUsage: 0,
       activeWorkers: 0,
+      carbonSavedGrams: 0,
     }))
   );
 
@@ -158,13 +159,9 @@ export function GlobalMetricsPanel({ workers }: { workers: WireWorker[] }) {
         .filter((value): value is number => typeof value === "number")
     ),
     gpuUsage: 0,
-    storageUsage: avgNumber(
-      activeWorkers
-        .map((worker) => worker.telemetry?.storage?.usagePercent)
-        .filter((value): value is number => typeof value === "number")
-    ),
     activeWorkers: activeWorkers.length,
-  }), [activeWorkers]);
+    carbonSavedGrams: Math.round(jobs.reduce((sum, job) => sum + getJobCarbonSavedGrams(job), 0) * 10) / 10,
+  }), [activeWorkers, jobs]);
 
   const lastRef = useRef<MetricSnapshot>(current);
   useEffect(() => {
@@ -181,7 +178,9 @@ export function GlobalMetricsPanel({ workers }: { workers: WireWorker[] }) {
   const cpuHistory = history.map((snap) => snap.cpuPressure);
   const memoryHistory = history.map((snap) => snap.memoryPoolGb);
   const gpuHistory = history.map((snap) => snap.gpuUsage);
+  const carbonHistory = history.map((snap) => snap.carbonSavedGrams);
   const maxMemoryPool = Math.max(...memoryHistory, current.memoryPoolGb, 1);
+  const carbonBounds = Math.max(...carbonHistory.map((value) => Math.abs(value)), Math.abs(current.carbonSavedGrams), 1);
 
   return (
     <section className="mb-10">
@@ -224,10 +223,16 @@ export function GlobalMetricsPanel({ workers }: { workers: WireWorker[] }) {
           icon={<Zap size={13} className="text-[#2D6A4F]" />}
           displayValue="—"
         />
-        <MetricNumber
-          label="Storage Usage"
-          value={current.storageUsage > 0 ? `${current.storageUsage}%` : "—"}
-          icon={<HardDrive size={13} className="text-blue-600" />}
+        <Sparkline
+          values={carbonHistory.map((value) => value + carbonBounds)}
+          color={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"}
+          fillColor={current.carbonSavedGrams >= 0 ? "#2D6A4F" : "#BA1A1A"}
+          label="Net Carbon Saved"
+          current={current.carbonSavedGrams + carbonBounds}
+          icon={<Leaf size={13} className={current.carbonSavedGrams >= 0 ? "text-green-700" : "text-[#BA1A1A]"} />}
+          displayValue={formatCarbonSaved(current.carbonSavedGrams)}
+          unit=""
+          maxValue={carbonBounds * 2}
         />
         <MetricNumber
           label="Active Workers"
