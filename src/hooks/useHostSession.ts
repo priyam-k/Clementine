@@ -8,13 +8,11 @@ import type {
   WireSession,
   FractalJobConfig,
   WireTask,
-  FractalTileInput,
   FractalTileResultPayload,
   EnterpriseBenchmarkConfig,
 } from "@/lib/shared-types";
 import { collectTelemetryHeartbeat, collectWorkerProfile } from "@/lib/browser-telemetry";
-import { computeFractalTileMaxCpu } from "@/lib/fractal-parallel";
-import { executeK2InferenceTask } from "@/lib/inference-client";
+import { executeAssignedTask } from "@/lib/task-execution";
 
 // ─── Public state shape ───────────────────────────────────────────────────────
 
@@ -69,45 +67,10 @@ export function useHostSession(): HostSessionState {
     const socket = getSocket();
 
     try {
-      if (task.jobType === "fractal-render") {
-        socket.emit("task:progress", { taskId: task.id, progress: 5 });
-        const input = task.inputPayload as unknown as FractalTileInput;
-        socket.emit("task:progress", { taskId: task.id, progress: 10 });
-        const output = await computeFractalTileMaxCpu(input, (progress) => {
-          socket.emit("task:progress", { taskId: task.id, progress: 10 + Math.floor(progress * 0.9) });
-        });
-        socket.emit("task:progress", { taskId: task.id, progress: 100 });
-        socket.emit("task:complete", { taskId: task.id, output: output as unknown as Record<string, unknown> });
-      } else if (
-        task.jobType === "batch-inference" ||
-        task.jobType === "llm-analysis" ||
-        task.jobType === "enterprise-analysis"
-      ) {
-        socket.emit("task:progress", { taskId: task.id, progress: 15 });
-        const output = await executeK2InferenceTask(task);
-        socket.emit("task:progress", { taskId: task.id, progress: 100 });
-        socket.emit("task:complete", { taskId: task.id, output });
-      } else {
-        // Mock compute for other job types
-        const complexity = typeof task.inputPayload.complexity === "number" ? task.inputPayload.complexity : 2;
-        const durationMs = 1500 + complexity * 800 + Math.random() * 1500;
-        const steps = 6;
-        for (let i = 1; i <= steps; i++) {
-          await new Promise<void>((r) => setTimeout(r, durationMs / steps));
-          socket.emit("task:progress", { taskId: task.id, progress: Math.round((i / steps) * 99) });
-        }
-        const batchSize = typeof task.inputPayload.batchSize === "number" ? task.inputPayload.batchSize : 1000;
-        socket.emit("task:complete", {
-          taskId: task.id,
-          output: {
-            success: true,
-            result: `Processed by host`,
-            opsCount: Math.floor(batchSize * (0.8 + Math.random())),
-            durationMs,
-            efficiency: 0.85 + Math.random() * 0.1,
-          },
-        });
-      }
+      const output = await executeAssignedTask(task, (progress) => {
+        socket.emit("task:progress", { taskId: task.id, progress });
+      });
+      socket.emit("task:complete", { taskId: task.id, output });
     } catch (err) {
       socket.emit("task:failed", {
         taskId: task.id,

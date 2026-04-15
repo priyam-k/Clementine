@@ -102,10 +102,11 @@ export function FractalCanvas({ job, tiles }: FractalCanvasProps) {
       <div className="relative bg-[#120B09]">
         <canvas
           ref={canvasRef}
-          width={imageDims?.w ?? 1200}
-          height={imageDims?.h ?? 800}
           className="w-full h-auto block"
-          style={{ imageRendering: "pixelated" }}
+          style={{
+            imageRendering: "pixelated",
+            aspectRatio: imageDims ? `${imageDims.w} / ${imageDims.h}` : "1200 / 800",
+          }}
         />
         {/* Progress overlay — visible while rendering */}
         {!isComplete && totalTiles > 0 && (

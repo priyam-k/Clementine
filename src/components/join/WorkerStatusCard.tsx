@@ -1,5 +1,4 @@
 "use client";
-import { useState } from "react";
 import { Wifi, WifiOff, Loader2, Leaf } from "lucide-react";
 import type { WorkerStatus } from "@/lib/types";
 

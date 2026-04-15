@@ -12,12 +12,12 @@ interface ResultPanelProps {
 }
 
 export function ResultPanel({ job, wide = false }: ResultPanelProps) {
-  if (!job.result) return null;
-  const { result } = job;
   const markdownArtifact = useMemo(
     () => job.artifacts?.find((artifact) => artifact.artifactType === "markdown"),
     [job.artifacts]
   );
+  if (!job.result) return null;
+  const { result } = job;
 
   const handleExport = () => {
     if (!markdownArtifact || typeof window === "undefined") return;

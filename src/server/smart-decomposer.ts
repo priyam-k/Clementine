@@ -64,7 +64,7 @@ export function classifyCommand(command: string): SmartCommandKind {
 
 // ── Per-kind task builders ────────────────────────────────────────────────────
 
-function buildCodeTasks(command: string, title: string): SmartTaskSpec[] {
+function buildCodeTasks(command: string): SmartTaskSpec[] {
   const ctx = `Original request: "${command}"`;
   return [
     {
@@ -270,7 +270,7 @@ export function smartDecompose(command: string): SmartDecomposition | null {
 
   switch (kind) {
     case "code":
-      tasks = buildCodeTasks(command, title);
+      tasks = buildCodeTasks(command);
       hint = "Assemble the code sections in order: Types, Core Implementation, Validation, Tests. Combine into one coherent file.";
       break;
     case "math":

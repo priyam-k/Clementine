@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { WorkerStatusCard } from "@/components/join/WorkerStatusCard";
@@ -54,23 +54,19 @@ function JoinPageInner() {
   const [manualJoined, setManualJoined] = useState(false);
   const [hasLeft, setHasLeft] = useState(false);
 
-  const workerName = useMemo(
-    () => WORKER_NAMES[Math.floor(Math.random() * WORKER_NAMES.length)],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+  const [workerName] = useState(
+    () => WORKER_NAMES[Math.floor(Math.random() * WORKER_NAMES.length)]
   );
-  const deviceName = useMemo(() => getDeviceName(), []);
+  const [deviceName] = useState(getDeviceName);
 
   // Auto-join when a QR code URL param is present.
   // Uses [codeFromUrl] as the only dep so it runs once per code change.
   // The server deduplicates duplicate worker:join events by socketId so
   // React Strict Mode's double-invoke doesn't create ghost workers.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!codeFromUrl || hasLeft) return;
     joinSession(codeFromUrl, workerName, deviceName);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codeFromUrl]);
+  }, [codeFromUrl, deviceName, hasLeft, joinSession, workerName]);
 
   const handleJoin = () => {
     const code = joinCode.trim().toUpperCase();

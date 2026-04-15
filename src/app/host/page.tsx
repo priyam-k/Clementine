@@ -357,7 +357,7 @@ export default function HostPage() {
                   Global Metrics
                 </h2>
               </div>
-              <GlobalMetricsPanel workers={workers} jobs={jobs} schedulerBias={schedulerBias} />
+              <GlobalMetricsPanel workers={workers} schedulerBias={schedulerBias} />
             </div>
           </section>
         )}

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { X, Copy, Download, Check } from "lucide-react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
-import type { WireJob, WireTask, JobType } from "@/lib/shared-types";
+import type { WireJob, WireTask } from "@/lib/shared-types";
 import {
   buildJobProcessDump,
   formatDuration,

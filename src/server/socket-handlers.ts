@@ -2,7 +2,6 @@ import type { Server as IOServer, Socket } from "socket.io";
 import type {
   ServerToClientEvents,
   ClientToServerEvents,
-  FractalJobConfig,
   FractalTileInput,
   FractalTileOutput,
   EnterpriseBenchmarkConfig,
@@ -28,7 +27,6 @@ import {
   toWireJob,
   getTasksForJob,
   getHostSocketForSession,
-  createTask,
   updateSessionHostSocket,
   updateSessionSchedulerBias,
   rebindWorkerSocket,
@@ -44,14 +42,12 @@ import { executionBridges } from "./graph-nodes";
 import { networkInterfaces } from "os";
 import type { WorkerTelemetry } from "../lib/shared-types";
 import { persistJobSnapshot, persistWorkerSnapshots } from "./mongo";
-import { decomposeWithLLM, synthesizeResult } from "./llm-decomposer";
+import { synthesizeResult } from "./llm-decomposer";
 import { handleWorkerJoin, type Worker as SchedulerWorker } from "./taskScheduler";
 import { estimateTaskCarbonSavedGrams } from "../lib/carbon-metrics";
 import {
   buildEnterpriseResultSummary,
-  buildEnterpriseTaskPayload,
   createEnterpriseMarkdownArtifact,
-  decomposeEnterpriseAnalysis,
   generateVendorProfiles,
   synthesizeEnterpriseMarkdown,
 } from "./enterprise-benchmark";
@@ -422,7 +418,6 @@ export function setupSocketHandlers(io: IO, port: number) {
       const worker = getWorkerBySocket(socket.id);
       if (!worker) return;
 
-      const progressTask = getTask(taskId);
       updateTask(taskId, { status: "running", progress });
       updateWorker(worker.id, {
         status: "working",
@@ -479,7 +474,7 @@ export function setupSocketHandlers(io: IO, port: number) {
         outputPayload: storedOutput,
         completedAt: now,
       });
-      const updatedWorker = updateWorker(worker.id, {
+      updateWorker(worker.id, {
         status: "idle",
         currentTaskId: undefined,
         activeTasks: Math.max((worker.activeTasks ?? 1) - 1, 0),

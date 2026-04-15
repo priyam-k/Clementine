@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { WireJob, WireWorker } from "@/lib/shared-types";
+import type { WireWorker } from "@/lib/shared-types";
 import { Cpu, Database, Leaf, Users } from "lucide-react";
 import { formatCarbonSaved } from "@/lib/carbon-metrics";
 
@@ -136,11 +136,9 @@ function MetricNumber({
 
 export function GlobalMetricsPanel({
   workers,
-  jobs,
   schedulerBias,
 }: {
   workers: WireWorker[];
-  jobs: WireJob[];
   schedulerBias: number;
 }) {
   const [history, setHistory] = useState<MetricSnapshot[]>(() =>
@@ -186,7 +184,7 @@ export function GlobalMetricsPanel({
       activeWorkers: activeWorkers.length,
       carbonSavedGrams,
     };
-  }, [activeWorkers, workers, schedulerBias, jobs]);
+  }, [activeWorkers, workers, schedulerBias]);
 
   const lastRef = useRef<MetricSnapshot>(current);
   useEffect(() => {

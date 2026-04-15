@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Loader2, CheckCircle, AlertCircle, Send, ChevronDown, Zap } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import { Mic, MicOff, CheckCircle, AlertCircle, Send, ChevronDown, Zap } from "lucide-react";
 
-type VoiceState = "idle" | "listening" | "transcribing" | "ready" | "unsupported";
+type VoiceState = "idle" | "listening" | "ready" | "unsupported";
 
 interface CommandDispatchCardProps {
   onSubmit?: (command: string) => void;
@@ -46,6 +46,11 @@ const SAMPLE_COMMANDS = [
   "Benchmark all connected worker nodes",
 ];
 
+function getSpeechRecognitionConstructor() {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
 function speakConfirmation(text: string) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   const short = text.length > 40 ? text.slice(0, 40) + "…" : text;
@@ -58,32 +63,23 @@ function speakConfirmation(text: string) {
 }
 
 export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
-  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const [transcript, setTranscript] = useState("");
-  const [interimTranscript, setInterimTranscript] = useState("");
+  const [voiceState, setVoiceState] = useState<VoiceState>(() =>
+    getSpeechRecognitionConstructor() ? "idle" : "unsupported"
+  );
   const [value, setValue] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const dispatchedRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const SpeechRecAPI = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!SpeechRecAPI) {
-      setVoiceState("unsupported");
-    }
-  }, []);
+  const transcriptRef = useRef("");
 
   const stopListening = useCallback(() => {
     recognitionRef.current?.stop();
     recognitionRef.current = null;
-    setInterimTranscript("");
   }, []);
 
   const startListening = useCallback(() => {
-    if (typeof window === "undefined") return;
-    const SpeechRecAPI = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const SpeechRecAPI = getSpeechRecognitionConstructor();
     if (!SpeechRecAPI) return;
 
     const recognition = new SpeechRecAPI();
@@ -95,8 +91,7 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
 
     recognition.onstart = () => {
       setVoiceState("listening");
-      setTranscript("");
-      setInterimTranscript("");
+      transcriptRef.current = "";
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -112,16 +107,12 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
       }
 
       if (final) {
-        setTranscript((prev) => {
-          const next = (prev + " " + final).trim();
-          setValue(next);
-          return next;
-        });
-        setInterimTranscript("");
+        const nextTranscript = `${transcriptRef.current} ${final}`.trim();
+        transcriptRef.current = nextTranscript;
+        setValue(nextTranscript);
       }
-
       if (interim) {
-        setInterimTranscript(interim);
+        setValue(`${transcriptRef.current} ${interim}`.trim());
       }
     };
 
@@ -134,22 +125,18 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
     };
 
     recognition.onend = () => {
-      setInterimTranscript("");
-      setVoiceState((prev) => {
-        if (prev === "listening" || prev === "transcribing") {
-          return transcript ? "ready" : "idle";
-        }
-        return prev;
-      });
+      setVoiceState((prev) =>
+        prev === "listening" ? (transcriptRef.current ? "ready" : "idle") : prev
+      );
     };
 
     recognition.start();
-  }, [transcript]);
+  }, []);
 
   const handleMicClick = () => {
     if (voiceState === "idle" || voiceState === "ready") {
       startListening();
-    } else if (voiceState === "listening" || voiceState === "transcribing") {
+    } else if (voiceState === "listening") {
       stopListening();
     }
   };
@@ -162,8 +149,7 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
     dispatchedRef.current = true;
     setTimeout(() => {
       setSubmitted(false);
-      setTranscript("");
-      setInterimTranscript("");
+      transcriptRef.current = "";
       setValue("");
       setVoiceState("idle");
     }, 1800);
@@ -179,11 +165,9 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
     setShowSuggestions(false);
   };
 
-  const displayText = transcript + (interimTranscript ? ` ${interimTranscript}` : "");
   const stateLabel: Partial<Record<VoiceState, string>> = {
     idle: "Tap to speak",
     listening: "Listening…",
-    transcribing: "Transcribing…",
     ready: "Voice ready",
     unsupported: "Not available",
   };
@@ -242,9 +226,7 @@ export function CommandDispatchCard({ onSubmit }: CommandDispatchCardProps) {
                   : "bg-[#120B09] hover:bg-[#2a1b17]"
               }`}
             >
-              {voiceState === "transcribing" ? (
-                <Loader2 size={22} className="text-[#EF8354] animate-spin" />
-              ) : voiceState === "ready" ? (
+              {voiceState === "ready" ? (
                 <CheckCircle size={22} className="text-white" />
               ) : voiceState === "listening" ? (
                 <Mic size={22} className="text-white" />
